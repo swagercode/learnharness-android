@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.LearnHarness" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#111612</item>
+        <item name="android:statusBarColor">#111612</item>
+        <item name="android:navigationBarColor">#111612</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorAccent">#a6bc98</item>
+    </style>
+</resources>

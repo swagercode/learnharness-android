@@ -1,0 +1,37 @@
+node_modules/
+data/
+.next/
+*.log
+.DS_Store
+*.tsbuildinfo
+.env.local
+.memory/
+SCOPE.md
+# raw real-data import sources (user directive 2026-09-13: never commit)
+real-data-extraction/
+dist/
+.local-preview/
+.codex-attachments/
+*.p12
+*.jks
+*.keystore
+
+# dev auth/keys store (auth-keys wave): repo-root auth.json — secrets never committed
+auth.json
+chatgpt-credentials.json*
+github-copilot-credentials.json*
+xai-credentials.json*
+
+# dev-fresh launcher scratch (fresh-user sim): disposable per launch
+.fresh-data/
+
+# Android generated payload, build products and signing material.
+android/.gradle/
+android/.generated/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/app/.externalNativeBuild/
+android/local.properties
+android/*.keystore
+android/*.jks

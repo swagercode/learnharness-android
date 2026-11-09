@@ -1,0 +1,39 @@
+{
+  "id": "chat_mobile_demo_check",
+  "title": "Fullscreen demo regression",
+  "createdAt": "2026-11-08T22:14:09.157Z",
+  "updatedAt": "2026-11-08T22:14:09.157Z",
+  "messages": [
+    {
+      "id": "u_fixture",
+      "role": "user",
+      "content": "Explain binary search",
+      "timestamp": 1794176049157
+    },
+    {
+      "id": "steer_fixture-demo",
+      "role": "custom",
+      "customType": "subagent-steer",
+      "content": "The demo \"Interactive workspace\" is built, headlessly tested, and rendered in the lesson. Builder notes: (none).\nTeach with it \u2014 reference its controls by name and point the learner at what to try.",
+      "display": true,
+      "details": {
+        "jobId": "fixture-demo",
+        "kind": "demo",
+        "toolCallId": "fixture-demo-call",
+        "result": {
+          "title": "Interactive workspace",
+          "html": "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>body{font:20px system-ui;margin:24px;background:#101810;color:#e8eee4}button{font:inherit;padding:14px}#tail{margin-top:1400px}</style></head><body><h1>Interactive workspace</h1><button id=\"count\" onclick=\"this.textContent=String(++window.count)\">0</button><script>window.count=0;window.instance=String(Math.random());</script><p>Keep this counter when opening and closing full screen.</p><button id=\"tail\">Bottom control</button><script>window.reportFixture=()=>parent.postMessage({type:'fixture-demo-state',instance:window.instance,count:window.count},'*');window.addEventListener('message',e=>{if(e.source!==parent)return;if(e.data?.type==='fixture-increment')document.getElementById('count').click();if(e.data?.type?.startsWith('fixture-'))reportFixture()});document.getElementById('count').addEventListener('click',reportFixture);</script></body></html>",
+          "tested": true
+        }
+      },
+      "timestamp": 1794200132122
+    }
+  ],
+  "settings": {
+    "model": {
+      "provider": "openai",
+      "id": "fixture-no-provider-calls"
+    }
+  },
+  "version": 1
+}

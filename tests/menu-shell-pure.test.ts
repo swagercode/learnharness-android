@@ -1,0 +1,101 @@
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { computeMenuPlacement, type MenuSide } from "../components/menu-shell.tsx";
+
+/**
+ * The shared menu shell's placement decision (fix wave chunk B): the
+ * pure math behind every dropdown's anchoring — side preference, the
+ * honest-fit flip, the 60vh cap, alignment. The DOM effects (portal,
+ * measure-then-show, re-placement on scroll/resize) are live-verified;
+ * this pins the geometry.
+ */
+
+const rect = (top: number, bottom: number) => ({ top, bottom, left: 100, right: 300 });
+const viewport = (height: number) => ({ width: 1280, height });
+
+describe("computeMenuPlacement — side", () => {
+	it("keeps the preferred side when it shows the whole menu", () => {
+		for (const preferred of ["up", "down"] as MenuSide[]) {
+			const p = computeMenuPlacement(rect(400, 440), viewport(800), 300, preferred, "right");
+			assert.equal(p.side, preferred);
+		}
+	});
+
+	it("flips when the preferred side cannot hold the content and the other is roomier", () => {
+		// Anchor 30px above the viewport bottom: down has ~2px of room,
+		// up has ~380. A 300px menu must flip UP despite preferring down.
+		const p = computeMenuPlacement(rect(770, 800), viewport(800), 300, "down", "right");
+		assert.equal(p.side, "up");
+		// ...and mirrors: an anchor at the very top preferring up flips down.
+		const q = computeMenuPlacement(rect(0, 30), viewport(800), 300, "up", "right");
+		assert.equal(q.side, "down");
+	});
+
+	it("stays put when neither side fits better (the roomier side already preferred)", () => {
+		// Short viewport: down has 450, up has 200 — a 600px menu stays
+		// down (capped gracefully) because up is NOT roomier.
+		const p = computeMenuPlacement(rect(150, 190), viewport(650), 600, "down", "right");
+		assert.equal(p.side, "down");
+	});
+
+	it("nothing measured yet (contentHeight ≤ 0) keeps the preferred side", () => {
+		const p = computeMenuPlacement(rect(770, 800), viewport(800), 0, "down", "right");
+		assert.equal(p.side, "down");
+	});
+});
+
+describe("computeMenuPlacement — cap + position", () => {
+	it("caps at 60vh when the side has more room than that", () => {
+		// Anchor high: 648px below it — more than 60vh(480) → the cap is 60vh.
+		const p = computeMenuPlacement(rect(100, 140), viewport(800), 300, "down", "right");
+		assert.equal(p.maxHeight, 0.6 * 800);
+		assert.equal(p.style.top, 144); // anchor bottom + GAP(4)
+		assert.equal(p.style.left, 300); // right edge, unmeasured width
+	});
+
+	it("caps at the side's available room when 60vh exceeds it", () => {
+		// Anchor at 500/800: down room = 800 − 8 − 544 = 248 < 480. The
+		// short content (100) fits down — no flip — so the cap binds at 248.
+		const p = computeMenuPlacement(rect(500, 540), viewport(800), 100, "down", "right");
+		assert.equal(p.side, "down");
+		assert.equal(p.maxHeight, 248);
+	});
+
+	it("keeps even a tiny viewport contained instead of overflowing its edge", () => {
+		// Anchor 30px above the bottom, both sides thin: capped to the
+		// floor, not a 2px sliver — the cap overflows rather than crushes.
+		const p = computeMenuPlacement(rect(30, 60), viewport(90), 300, "down", "right");
+		assert.equal(p.maxHeight, 74);
+		assert.equal(p.style.top, 8);
+	});
+
+	it("up-side menus anchor their BOTTOM above the anchor's top", () => {
+		const p = computeMenuPlacement(rect(400, 440), viewport(800), 300, "up", "right");
+		assert.equal(p.style.top, 400 - 4 - 300);
+	});
+
+	it("left alignment keys off the anchor's left edge", () => {
+		const p = computeMenuPlacement(rect(400, 440), viewport(800), 300, "down", "left");
+		assert.equal(p.style.left, 100);
+		assert.ok(!("right" in p.style));
+	});
+});
+
+describe("mobile menu bounds", () => {
+	it("clamps a wide right-aligned picker whose trigger is near the left edge", () => {
+		const p = computeMenuPlacement({ top: 290, bottom: 334, left: 16, right: 120 }, { width: 393, height: 680 }, 400, "down", "right", 352);
+		assert.equal(p.style.left, 8);
+		assert.ok(Number(p.style.left) + 352 <= 393 - 8);
+	});
+	it("caps the width to a narrow phone and follows a reduced keyboard viewport", () => {
+		const p = computeMenuPlacement({ top: 510, bottom: 554, left: 16, right: 120 }, { width: 320, height: 310, top: 60 }, 600, "down", "right", 352);
+		assert.equal(p.style.maxWidth, 304);
+		assert.equal(p.style.left, 8);
+		assert.ok(Number(p.style.top) >= 68);
+		assert.ok(Number(p.style.top) + p.maxHeight <= 362);
+	});
+	it("clamps a left-aligned menu at the right edge", () => {
+		const p = computeMenuPlacement({ top: 100, bottom: 144, left: 360, right: 390 }, { width: 393, height: 800 }, 100, "down", "left", 176);
+		assert.equal(p.style.left, 209);
+	});
+});

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LearnHarness · startup animation preview</title>
+<style>
+ *{box-sizing:border-box}html,body{margin:0;background:#111612;height:100%;overflow:hidden}
+ canvas{display:block;width:100%;height:100%;object-fit:contain}
+</style>
+<canvas width="1080" height="2424" aria-label="LearnHarness. Getting your workspace ready."></canvas>
+<script>
+// Reviewable motion study, independent of the Android build. Time is explicit
+// so the video renderer and interactive preview produce identical frames.
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');
+const W=412,H=924.711111;
+const firstLaunch=new URLSearchParams(location.search).has('firstLaunch');
+const clamp=x=>Math.max(0,Math.min(1,x));
+const smooth=x=>{x=clamp(x);return x*x*(3-2*x)};
+const ease=x=>1-Math.pow(1-clamp(x),3);
+const font=new FontFace('HarnessSerif','url(../../public/fonts/cmunbx.ttf)');
+const mark=new Image();mark.src='./mark.svg';
+const ready=Promise.all([font.load().then(f=>document.fonts.add(f)),mark.decode()]);
+function circle(x,y,r,color){ctx.fillStyle=color;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill()}
+function line(x,y,xx,yy,color,width=1){ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(xx,yy);ctx.stroke()}
+function text(t,x,y,size,color,family='Arial',weight='400'){ctx.font=`${weight} ${size}px ${family}`;ctx.fillStyle=color;ctx.textAlign='center';ctx.fillText(t,x,y)}
+const anchors=[[-107,-35],[-78,-106],[9,-135],[97,-89],[128,1],[85,97],[-3,124],[-105,66]];
+const paths=[[0,1],[1,2],[2,3],[3,4],[4,5],[5,6],[6,7],[7,0],[1,7],[3,5]];
+window.renderFrame=t=>{
+ ctx.setTransform(canvas.width/W,0,0,canvas.height/H,0,0);
+ ctx.globalAlpha=1;ctx.fillStyle='#111612';ctx.fillRect(0,0,W,H);
+ const breathing=.5+.5*Math.sin(t*Math.PI/3);
+ const bg=ctx.createRadialGradient(206,390,15,206,390,300);
+ bg.addColorStop(0,`rgba(115,155,103,${.09+breathing*.025})`);bg.addColorStop(1,'rgba(17,22,18,0)');
+ ctx.fillStyle=bg;ctx.fillRect(0,60,W,H-100);
+ // Pixel system bars, kept stationary while the app animates beneath them.
+ text('9:41',41,29,13,'#e7eae4','Arial','600');
+ circle(206,23,4.5,'#070b08');
+ for(let i=0;i<4;i++){ctx.fillStyle='#dce3da';ctx.fillRect(329+i*4,27-i*2.4,2.5,3+i*2.4)}
+ ctx.strokeStyle='#dce3da';ctx.lineWidth=1.6;ctx.beginPath();ctx.arc(357,29,9,Math.PI*1.23,Math.PI*1.77);ctx.stroke();ctx.beginPath();ctx.arc(357,29,5,Math.PI*1.23,Math.PI*1.77);ctx.stroke();circle(357,28,1.1,'#dce3da');
+ ctx.strokeStyle='#dce3da';ctx.lineWidth=1;ctx.strokeRect(374,18,15,9);ctx.fillStyle='#dce3da';ctx.fillRect(376,20,10,5);ctx.fillRect(390,21,1.5,3);
+ ctx.fillStyle='#dce3da';ctx.beginPath();ctx.roundRect(148,H-14,116,4,2);ctx.fill();
+ // A small knowledge graph wakes up around the existing app mark.
+ const cx=206,cy=379;
+ const arrive=ease(t/1.8);
+ const points=anchors.map(([x,y],i)=>{
+  const spread=1.2-.2*arrive;
+  return [cx+x*spread+Math.sin(t*.45+i)*3,cy+y*spread+Math.cos(t*.5+i*.8)*3];
+ });
+ paths.forEach(([a,b],i)=>{
+  const p=smooth((t-.25-i*.065)/1.1);
+  const [x,y]=points[a],[xx,yy]=points[b];
+  line(x,y,x+(xx-x)*p,y+(yy-y)*p,`rgba(151,180,140,${.12*p})`,.7);
+  if(t>1.4){const phase=((t-1.4)*.19+i*.17)%1,fade=Math.sin(phase*Math.PI)*.5;circle(x+(xx-x)*phase,y+(yy-y)*phase,1.5,`rgba(185,215,164,${fade})`)}
+ });
+ points.forEach(([x,y],i)=>{
+  const a=smooth((t-.1-i*.07)/.65),pulse=.5+.5*Math.sin(t*1.1-i*.7);
+  const halo=ctx.createRadialGradient(x,y,0,x,y,12);
+  halo.addColorStop(0,`rgba(168,205,145,${a*.11*pulse})`);halo.addColorStop(1,'rgba(168,205,145,0)');
+  ctx.fillStyle=halo;ctx.fillRect(x-12,y-12,24,24);
+  circle(x,y,i%3===0?2.5:1.7,`rgba(192,213,176,${a*(.35+pulse*.45)})`);
+ });
+ ctx.save();
+ ctx.globalAlpha=smooth(t/1.1);
+ const size=77*(.92+.08*arrive)+breathing*1.6;
+ ctx.translate(cx,cy);
+ ctx.rotate((1-ease(t/2.4))*(-Math.PI/3)+Math.sin(t*.7)*.045);
+ ctx.shadowColor='rgba(171,209,147,.12)';ctx.shadowBlur=18;
+ ctx.drawImage(mark,-size/2,-size/2,size,size);
+ ctx.restore();
+ // The thin, incomplete halo breathes; it never claims a fake percentage.
+ ctx.strokeStyle=`rgba(172,203,150,${.12+.04*breathing})`;ctx.lineWidth=.6;
+ ctx.beginPath();ctx.arc(cx,cy,67+breathing*2,t*.11-.7,t*.11+3.8);ctx.stroke();
+ ctx.save();ctx.globalAlpha=smooth((t-.3)/1.1);
+ text('LearnHarness',206,556-8*arrive,35,'#edf0e7','HarnessSerif');
+ text('Getting your workspace ready',206,585-8*arrive,14,'#a4b19f');
+ ctx.restore();
+ ctx.globalAlpha=smooth((t-.7)/.8);
+ for(let i=0;i<3;i++){const p=.5+.5*Math.sin(t*2.4-i*.75);circle(196+i*10,611,1.6,`rgba(181,206,159,${.25+.6*p})`)}
+ ctx.globalAlpha=smooth((t-1)/1);
+ if(firstLaunch)text('The first launch can take a little longer.',206,H-81,11.5,'#6f7d6d');
+ ctx.globalAlpha=1;
+};
+window.previewReady=ready.then(()=>{
+ if(new URLSearchParams(location.search).has('capture')){renderFrame(0);return;}
+ const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+ const start=performance.now();
+ function frame(now){renderFrame(reduced?3:(now-start)/1000);if(!reduced)requestAnimationFrame(frame)}
+ requestAnimationFrame(frame);
+});
+</script>
+</html>

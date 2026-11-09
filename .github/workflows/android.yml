@@ -1,0 +1,78 @@
+name: Android APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Focused Android regression tests
+        run: NODE_ENV=test npx tsx --test tests/dictation-flow.test.tsx tests/dictation-only.test.tsx tests/dictation-preference.test.ts tests/dictation-warm.test.ts tests/chat-input-performance.test.tsx tests/android-background.test.ts tests/android-demo.test.ts tests/session-backup.test.ts tests/research-final-brief.test.ts tests/demos.test.tsx tests/show-again.test.tsx tests/prompt-overrides.test.ts
+      - name: Restore embedded application payload
+        id: payload
+        uses: actions/cache/restore@v4
+        with:
+          path: android/.generated
+          key: android-payload-${{ hashFiles('src/**', 'lib/**', 'app/**', 'components/**', 'public/**', 'package-lock.json', 'package.json', 'next.config.ts', 'electron/**', 'android/runtime/**', 'android/runtime.json', 'android/*LICENSE', 'android/THIRD_PARTY_NOTICES.md', 'MODIFICATIONS.md', 'LICENSE', 'scripts/android/prepare.mjs', 'proxy.ts') }}
+      - name: Build embedded application
+        if: steps.payload.outputs.cache-hit != 'true'
+        run: npm run android:prepare
+      - name: Save embedded application payload
+        if: steps.payload.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: android/.generated
+          key: ${{ steps.payload.outputs.cache-primary-key }}
+      - name: Build Android and test bundle installation
+        working-directory: android
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleRelease
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Exercise APK on an Android tablet emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_c
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -memory 3072
+          script: node scripts/android/smoke.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: learnharness-android-arm64
+          path: android/app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: learnharness-android-validation
+          path: |
+            android/app/build/reports/tests/
+            android/.generated/smoke/
+          retention-days: 14
