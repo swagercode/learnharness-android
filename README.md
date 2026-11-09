@@ -43,6 +43,12 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.10
+
+- Fixes the white WebView fallback surface when returning to the app.
+- Keeps startup visible until the first page is ready to draw.
+- Returning from another app keeps the current page without reloading it.
+
 ## Version 0.4.1-android.9
 
 - Adds the native animated startup screen and first-launch detection.

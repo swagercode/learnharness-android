@@ -252,3 +252,8 @@ Questions and practice tasks carry their own starting values, steps, and conditi
 Interactive models remain separate; the agent can use `show_again` to bring an
 earlier verified demo or figure to the current position. A reused demo starts
 fresh, so required trial setup is stated explicitly.
+
+Version `0.4.1-android.10` gives the WebView the same dark fallback as the native
+window so it cannot flash its default white surface while returning to the app.
+Startup stays visible until Chromium reports the page is ready to draw. Normal
+app switching keeps the existing WebView and page rather than reloading them.

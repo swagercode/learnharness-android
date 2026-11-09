@@ -26,6 +26,7 @@ public final class MainActivity extends Activity {
     private PermissionRequest microphoneRequest;
     private boolean microphonePermissionInFlight;
     private boolean opened, destroyed;
+    private long pageGeneration;
     private long started;
     private static final int FILE_PICKER = 10;
     private static final int MICROPHONE_PERMISSION = 11;
@@ -147,6 +148,9 @@ public final class MainActivity extends Activity {
 
     @SuppressWarnings("SetJavaScriptEnabled")
     private void configure(WebView view) {
+        // Chromium can briefly draw its background before a page/compositor
+        // frame is available, including when returning from another app.
+        view.setBackgroundColor(StartupView.BACKGROUND);
         WebSettings settings = view.getSettings();
         settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
         settings.setSupportMultipleWindows(true); settings.setJavaScriptCanOpenWindowsAutomatically(false);
@@ -191,7 +195,7 @@ public final class MainActivity extends Activity {
     private WebViewClient client(boolean popup) {
         return new WebViewClient() {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
-                if (!popup) cancelMicrophoneRequest();
+                if (!popup) { pageGeneration++; cancelMicrophoneRequest(); }
             }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
@@ -219,10 +223,19 @@ public final class MainActivity extends Activity {
             @Override public void onPageFinished(WebView view, String url) {
                 if (!popup && local(url)) {
                     RuntimeService.firstLaunch = false;
-                    web.setVisibility(View.VISIBLE);
-                    if (loading.getVisibility() == View.VISIBLE) {
-                        loading.animate().alpha(0).setDuration(240).withEndAction(() -> loading.setVisibility(View.GONE)).start();
-                    }
+                    // Page-finished does not guarantee a painted frame. Keep
+                    // the native startup surface until Chromium can draw it;
+                    // ordinary app resumes retain the existing WebView/page.
+                    final long generation = pageGeneration;
+                    view.postVisualStateCallback(generation, new WebView.VisualStateCallback() {
+                        @Override public void onComplete(long requestId) {
+                            if (destroyed || requestId != pageGeneration || !local(view.getUrl())) return;
+                            view.setVisibility(View.VISIBLE);
+                            if (loading.getVisibility() == View.VISIBLE) {
+                                loading.animate().alpha(0).setDuration(240).withEndAction(() -> loading.setVisibility(View.GONE)).start();
+                            }
+                        }
+                    });
                     requestNotifications();
                     String message = RuntimeService.importMessage;
                     if (message != null) {
@@ -232,7 +245,10 @@ public final class MainActivity extends Activity {
                 }
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (!popup && request.isForMainFrame()) showError("LearnHarness could not open. Close the app from recent apps and reopen it. Your sessions are saved.");
+                if (!popup && request.isForMainFrame()) {
+                    pageGeneration++; // A pending paint callback must not hide the error surface.
+                    showError("LearnHarness could not open. Close the app from recent apps and reopen it. Your sessions are saved.");
+                }
             }
         };
     }

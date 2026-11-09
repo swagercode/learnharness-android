@@ -9,18 +9,29 @@ import { realHeadless } from "../src/agent/subagents/headless.ts";
 async function mailbox(result: unknown, test: (directory: string) => Promise<void>) {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "lh-android-demo-"));
 	let busy = false;
-	const timer = setInterval(async () => {
+	let inFlight: Promise<void> = Promise.resolve();
+	let pollError: unknown;
+	const handled = new Set<string>();
+	const timer = setInterval(() => {
 		if (busy) return; busy = true;
-		try {
+		inFlight = (async () => {
 			for (const name of await fs.readdir(directory)) {
-				if (!name.endsWith(".request")) continue;
+				if (!name.endsWith(".request") || handled.has(name)) continue;
+				handled.add(name);
 				const request = JSON.parse(await fs.readFile(path.join(directory, name), "utf8"));
 				assert.match(request.document, /frame.sandbox="allow-scripts"/);
-				await fs.writeFile(path.join(directory, name.replace(".request", ".response")), JSON.stringify(result));
+				const response = path.join(directory, name.replace(".request", ".response"));
+				await fs.writeFile(`${response}.tmp`, JSON.stringify(result));
+				await fs.rename(`${response}.tmp`, response);
 			}
-		} finally { busy = false; }
+		})().catch(error => { pollError = error; }).finally(() => { busy = false; });
 	}, 10);
-	try { await test(directory); } finally { clearInterval(timer); await fs.rm(directory, { recursive: true, force: true }); }
+	try { await test(directory); } finally {
+		clearInterval(timer);
+		await inFlight; // Do not delete the mailbox while its responder still runs.
+		await fs.rm(directory, { recursive: true, force: true });
+		if (pollError) throw pollError;
+	}
 }
 
 describe("Android demo verification", () => {
