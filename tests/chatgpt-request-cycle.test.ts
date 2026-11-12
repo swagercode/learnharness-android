@@ -23,7 +23,7 @@ const realFetch = globalThis.fetch;
 const desktopMarker = process.env.LH_DESKTOP_SERVER, desktopSecret = process.env.LH_DESKTOP_API_SECRET;
 const model = piModels().getModel("openai", "gpt-5") as Model<"openai-responses">;
 let epoch = 1, revision = 1, background = true;
-let cut: "lease" | "payload" | "full" | "afterFetch" | "none" = "none";
+let cut: "lease" | "payload" | "full" | "afterFetch" | "transient" | "none" = "none";
 let leases: boolean[] = [], fetches = 0, toolFirst = false;
 const status = () => ({ available: true, pending: false, allowBackgroundUse: background, activeId: "scratch", accounts: [{ id: "scratch", registration: "oaiapp_scratch", email: "dummy@example.invalid", connected: true, planEnabled: true, background: !background }], error: null });
 const ipc = (m: unknown) => (process.emit as (name: string, m: unknown) => boolean)("message", m);
@@ -50,6 +50,7 @@ before(() => {
   assert.equal(request.headers.get("user-agent"), APP_IDENTITY.userAgent.custom);
   const body = JSON.parse(await request.text()); assert.equal(body.model, model.id); assert.equal(body.store, false);
   fetches++;
+  if (cut === "transient" && (!toolFirst || fetches === 2)) { cut = "none"; return Response.json({ error: { code: "server_is_overloaded" } }, { status: 503 }); }
   if (cut === "afterFetch") { cut = "none"; revoke(); throw new Error("admitted local abort"); }
   if (toolFirst && fetches === 1) {
    const call = { type: "function_call", id: "fc_again", call_id: "call_again", name: "again", namespace: "learnharness", arguments: "{}", status: "completed" };
@@ -69,7 +70,7 @@ after(() => {
  if (originalConnected) Object.defineProperty(process, "connected", originalConnected); else delete (process as { connected?: boolean }).connected;
 });
 const automatic = (id = "auto") => ({ id, role: "custom" as const, customType: "subagent-steer" as const, content: "Automatic result", details: { jobId: "dummy-job" }, display: true, timestamp: 2 });
-async function nativeRun(where: typeof cut, staged: boolean, withLearner = true, commitThrows = false, lateAutomatic = false, withTool = false) {
+async function nativeRun(where: typeof cut, staged: boolean, withLearner = true, commitThrows = false, lateAutomatic = false, withTool = false, disconnect = false) {
  epoch++; revision++; background = true; cut = where; leases = []; fetches = 0; toolFirst = withTool;
  await refreshChatGPTModels([model]);
  const seed = newUserMessage("Initial learner"); const marker = automatic(); const learner = { ...newUserMessage("New learner"), id: "learner-late" };
@@ -88,9 +89,10 @@ async function nativeRun(where: typeof cut, staged: boolean, withLearner = true,
  if (!staged && !lateAutomatic) agent.steer(marker);
  if (withLearner) agent.steer(learner);
  const handle = runPiTurn({ agent, requestCycle: cycle, onFinish: (m) => { settled++; final = m; resolve(); } });
- const firstView = new Response(handle.subscribe()).text();
+ const firstSubscription = handle.subscribe();
+ const firstView = disconnect ? (await firstSubscription.cancel(), null) : new Response(firstSubscription).text();
  await finished;
- const wire = await firstView; const replay = await new Response(handle.subscribe()).text();
+ const replay = await new Response(handle.subscribe()).text(); const wire = firstView ? await firstView : replay;
  assert.equal(settled, 1);
  assert.equal(replay.includes('"id":"auto"'), wire.includes('"id":"auto"'));
  assert.equal(replay.split('"type":"agent_end"').length, 2);
@@ -99,6 +101,19 @@ async function nativeRun(where: typeof cut, staged: boolean, withLearner = true,
  assert.equal(events.filter((e) => e.type === "agent_start").length, 1);
  return { cycle, agent, final, wire, events, restored, committed, usage, executed, leases: [...leases], fetches };
 }
+test("background transient failure retries after UI disconnect with one durable input, result, and settlement", { timeout: 10000 }, async () => {
+ const r = await nativeRun("transient", true, false, false, false, false, true);
+ assert.equal(r.fetches, 2); assert.deepEqual(r.leases, [true, true]); assert.equal(r.committed, 1); assert.equal(r.usage, 1); assert.equal(r.restored, 0);
+ assert.equal(r.events.filter((e) => e.type === "message_end" && (e.message as { id?: string }).id === "auto").length, 1);
+ assert(!r.wire.includes('"stopReason":"error"')); assert.equal(await r.cycle.admission, true);
+});
+test("retry after a completed tool does not rerun the tool or duplicate the answer", { timeout: 10000 }, async () => {
+ const r = await nativeRun("transient", true, false, false, false, true);
+ assert.equal(r.fetches, 3); assert.equal(r.executed, 1); assert.equal(r.usage, 2); assert.equal(r.committed, 1);
+ assert.equal(r.final.filter((m) => m.role === "toolResult").length, 1);
+ assert.equal(r.final.filter((m) => m.role === "assistant" && m.content.some((b) => b.type === "text" && b.text === "Accepted learner")).length, 1);
+ assert(!r.wire.includes('"stopReason":"error"'));
+});
 for (const where of ["lease", "payload"] as const) for (const staged of [false, true]) {
  test(`real native drain -> ${where} denial -> same Agent foreground recovery, staged=${staged}`, { timeout: 5000 }, async () => {
   const r = await nativeRun(where, staged);

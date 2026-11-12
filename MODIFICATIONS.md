@@ -5,7 +5,7 @@ originally by Amos Blomqvist and contributors, based on the Android port at
 https://github.com/Matias-Sanmiguel/learnharness (base revision
 `3a827763629347b949faa9c97b286f3bb92f50ff`). It is not an official upstream release.
 
-Modified by swagercode, November 8–9, 2026. The whole application remains licensed
+Modified by swagercode, November 8–12, 2026. The whole application remains licensed
 under GNU AGPL version 3 only; see LICENSE. This software is provided without
 warranty, as described in that license. Existing copyright and third-party
 license notices are retained.
@@ -28,6 +28,8 @@ The Android distribution adds or changes:
   a show_again tool to bring verified demos and figures to the current position.
 - A dark WebView fallback during app switching, with startup held until a
   page frame is ready to draw.
+- Automatic, cancellable ChatGPT connection/service retries in the local
+  runtime, preserving consent, account selection, and completed tool work.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:

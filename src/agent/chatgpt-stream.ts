@@ -5,10 +5,13 @@ import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages"
 import { chatGPTAbortController, chatGPTScope, chatGPTScopeCurrent, chatGPTLease, chatGPTDenial } from "./chatgpt-bridge.ts";
 import type { AdmissionScope, ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
 import { capturePreparedBackgroundPayload } from "./background-capture.ts";
+import { retryChatGPTRequest } from "./chatgpt-retry.ts";
 
 const USAGE = "https://chatgpt.com/settings/usage";
 export function chatGPTStreamError(message: string): string {
-	if (/subscription_sharing_usage_limit_exceeded|quota|429/.test(message)) return `ChatGPT plan usage limit reached. Manage usage at ${USAGE}. No API-key fallback was used.`;
+	if (/usage_limit|quota/.test(message)) return `ChatGPT plan usage limit reached. Manage usage at ${USAGE}. No API-key fallback was used.`;
+	if (/slow_down|rate_limit|429/.test(message)) return "ChatGPT is temporarily limiting requests. Automatic retries could not complete this request. Try again later.";
+	if (/subscription_sharing_(usage|user)_unavailable|server_is_overloaded|50[0234]/.test(message)) return "ChatGPT is temporarily unavailable. Automatic retries could not complete this request. Try again later.";
 	if (/scope|authorization_context|permission/.test(message)) return "ChatGPT plan permission is missing. Reconnect in Providers and authorize plan use. No API-key fallback was used.";
 	if (/expired|invalid_grant|401|invalid_user/.test(message)) return "Your ChatGPT session expired. Reconnect in Providers. No API-key fallback was used.";
 	if (/background|Background/.test(message)) return "ChatGPT background use is off in this app. Enable Allow background use for all ChatGPT accounts in Providers to run this work. No API-key fallback was used.";
@@ -16,7 +19,7 @@ export function chatGPTStreamError(message: string): string {
 	if (/cancel|abort|closed|disconnect/i.test(message)) return "ChatGPT request cancelled or connection closed. No API-key fallback was used.";
 	if (/catalog|model/.test(message)) return "The selected model is unavailable for this ChatGPT account. Refresh Providers and explicitly choose an available model. No API-key fallback was used.";
 	if (/incomplete|terminal|interrupted|stop reason/.test(message)) return "ChatGPT returned an incomplete response. Retry when ready; no API-key fallback was used.";
-	return "ChatGPT request failed. Check your connection and ChatGPT usage, then retry. No API-key fallback was used.";
+	return "ChatGPT request failed. Temporary connection and service failures are retried automatically. Check your connection and ChatGPT usage if this keeps happening. No API-key fallback was used.";
 }
 
 /** Restrict the body at the final payload seam, even if caller samplingParams add fields. */
@@ -76,11 +79,22 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 					maxRetries: 0,
 					headers: { "OpenAI-Beta": null, ...options?.headers },
 					fetch: (input, init) => {
-						check();
-						if (committed) throw new Error("ChatGPT does not retry admitted requests");
-						lifecycle?.beforeDispatch(scope!);
-						committed = true;
-						return delegate(input, init);
+						// The SDK retry layer stays disabled: one logical admission and
+						// one set of input messages, even across several HTTP attempts.
+						const requestSignal = init?.signal ? AbortSignal.any([signal, init.signal]) : signal;
+						return retryChatGPTRequest(async (attempt) => {
+							check();
+							const accessToken = attempt === 0 ? credentials.accessToken : (await chatGPTLease(scope!, purpose)).accessToken;
+							check();
+							requestSignal.throwIfAborted();
+							if (!committed) {
+								lifecycle?.beforeDispatch(scope!);
+								committed = true;
+							}
+							const headers = new Headers(init?.headers);
+							headers.set("authorization", `Bearer ${accessToken}`);
+							return delegate(input, { ...init, headers, signal: requestSignal });
+						}, requestSignal);
 					},
 					onPayload: async (raw, model) => {
 						const replacement = await options?.onPayload?.(raw, model);

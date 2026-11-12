@@ -218,6 +218,35 @@ test("case-insensitive Authorization overrides including null are refused before
 	assert.equal(requests.length, before);
 });
 
+test("transient HTTP retry keeps the exact payload, identity, account, and single admission", { timeout: 10000 }, async () => {
+	let admitted = 0, captured = 0, payloads = 0, denied = 0;
+	const engine = piEngineForSpec({ provider: "chatgpt", id: model.id }, false, {
+		captured: () => { captured++; }, beforeDispatch: () => { admitted++; }, noDispatch: () => { denied++; },
+	});
+	const bodies: string[] = [], headers: Headers[] = [];
+	const result = await engine.streamFn(engine.model, context(), {
+		sessionId: "same-session", onPayload: () => { payloads++; },
+		fetch: async (input, init) => {
+			const request = new Request(input, init); bodies.push(await request.text()); headers.push(request.headers);
+			return bodies.length === 1 ? Response.json({ error: { code: "subscription_sharing_usage_unavailable" } }, { status: 503 }) : new Response(`data: ${JSON.stringify(complete())}\n\n`, { headers: { "content-type": "text/event-stream" } });
+		},
+	}).result();
+	assert.equal(result.stopReason, "stop"); assert.equal(bodies.length, 2); assert.equal(bodies[0], bodies[1]);
+	assert.equal(captured, 1); assert.equal(admitted, 1); assert.equal(payloads, 1); assert.equal(denied, 0);
+	for (const header of headers) { assert.equal(header.get("authorization"), "Bearer scratch-oauth-only"); assert.equal(header.get("session_id"), "same-session"); }
+});
+
+test("background consent revocation during backoff cancels without a second request", { timeout: 1000 }, async () => {
+	const engine = piEngineForSpec({ provider: "chatgpt", id: model.id }, true);
+	let attempts = 0;
+	const result = await engine.streamFn(engine.model, context(), { fetch: async () => {
+		attempts++;
+		setTimeout(() => ipc({ channel: "lh:chatgpt", kind: "state", stamp: { epoch: 1, authorityRevision: 1, revision: 2 }, status, invalidate: "background" }), 10);
+		return Response.json({ error: { code: "server_is_overloaded" } }, { status: 503 });
+	} }).result();
+	assert.equal(result.stopReason, "aborted"); assert.equal(attempts, 1);
+});
+
 test("full credential-storage invalidation aborts foreground and background controllers and clears capabilities", () => {
 	const foreground = chatGPTAbortController(false), background = chatGPTAbortController(true);
 	ipc({ channel: "lh:chatgpt", kind: "state", stamp: { epoch: 2, authorityRevision: 2, revision: 3 }, status: { ...status, available: false }, invalidate: "all" });

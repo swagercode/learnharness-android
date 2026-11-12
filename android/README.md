@@ -47,6 +47,31 @@ Install updates signed with the same key over the existing app to preserve data.
 Uninstalling or clearing app data removes local sessions and credentials. Backups
 are disabled so device-bound credentials are not copied to another device.
 
+## Automatic ChatGPT retries in v11
+
+Temporary connection failures, server errors, and explicit short-term rate
+limits retry in the local Node runtime, so leaving the screen does not require
+returning to press Retry. There are at most five retries, with exponential
+delays starting around two seconds plus jitter and a five-minute window for
+starting retries. A server's Retry-After is a minimum wait; if it exceeds the
+remaining window, the request stops instead of retrying early. Existing request
+timeouts still apply. Ready notifications use the normal background monitor.
+
+Stop, account changes, and revoked consent cancel pending retries. Each attempt
+checks the same account/model authority and obtains a current authorized token.
+Sign-in, eligibility, quota/plan limits, invalid requests, and ambiguous 429s are
+not retried. Completed tool work and input messages are not repeated. Once the
+streaming response is handed to the parser, an interruption is reported instead
+of replaying partially consumed output. Exhausted retries retain the manual
+Retry option. Force-stop and OS termination still interrupt the local runtime.
+
+Regression tests use fake provider responses and credentials, including a
+disconnected UI subscriber and a failure after a completed tool:
+
+```sh
+NODE_ENV=test npx tsx --test tests/chatgpt-retry.test.ts tests/chatgpt-stream.test.ts tests/chatgpt-request-cycle.test.ts
+```
+
 ## Startup and dictation in v9
 
 Version `0.4.1-android.9` replaces the native spinner with the reviewed animated

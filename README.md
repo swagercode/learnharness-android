@@ -43,6 +43,15 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.11
+
+- Automatically retries temporary ChatGPT connection, rate-limit, and service
+  failures before a response starts, including while the app is in the background.
+- Makes up to five retries with increasing delays and honors server-requested
+  waits. Stop cancels immediately; sign-in and plan limits still need attention.
+- Keeps the same session and input without rerunning completed tools. Existing
+  ready notifications apply when the request finishes.
+
 ## Version 0.4.1-android.10
 
 - Fixes the white WebView fallback surface when returning to the app.
