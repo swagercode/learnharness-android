@@ -877,6 +877,18 @@ describe("automatic continuation after recovery failure", () => {
 		await m.continueIfOwed(answered);
 		assert.equal(posts, 1);
 	});
+
+	it("settled reattach releases the send gate before asking to continue a saved answer", async () => {
+		let posts = 0, streams = 0, continuation: Promise<void> | undefined;
+		const m = model({ initialMessages: answered, fetch: dietFetch({
+			onPost: () => { posts++; },
+			stream: () => ++streams === 1 ? sseResponse({ type: "turn-settled" }, "[DONE]") : sseResponse("[DONE]"),
+		}), onReattachSettled: () => { continuation = m.continueIfOwed(answered); } });
+		await m.resumeStream(false);
+		await continuation;
+		assert.equal(posts, 1, "the settled notification must not lose the owed answer continuation behind a busy gate");
+		assert.equal(m.status, "ready");
+	});
 });
 
 // ─── failed answer submissions (no replay without canonical reconciliation) ──

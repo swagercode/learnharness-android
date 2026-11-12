@@ -24,7 +24,7 @@ const desktopMarker = process.env.LH_DESKTOP_SERVER, desktopSecret = process.env
 const model = piModels().getModel("openai", "gpt-5") as Model<"openai-responses">;
 let epoch = 1, revision = 1, background = true;
 let cut: "lease" | "payload" | "full" | "afterFetch" | "transient" | "none" = "none";
-let leases: boolean[] = [], fetches = 0, toolFirst = false;
+let leases: boolean[] = [], fetches = 0, toolFirst = false, silentFirst = false;
 const status = () => ({ available: true, pending: false, allowBackgroundUse: background, activeId: "scratch", accounts: [{ id: "scratch", registration: "oaiapp_scratch", email: "dummy@example.invalid", connected: true, planEnabled: true, background: !background }], error: null });
 const ipc = (m: unknown) => (process.emit as (name: string, m: unknown) => boolean)("message", m);
 function revoke(full = false) {
@@ -50,6 +50,7 @@ before(() => {
   assert.equal(request.headers.get("user-agent"), APP_IDENTITY.userAgent.custom);
   const body = JSON.parse(await request.text()); assert.equal(body.model, model.id); assert.equal(body.store, false);
   fetches++;
+  if (silentFirst && fetches === 1) return new Response(`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", output: [], usage: { input_tokens: 4, output_tokens: 0, total_tokens: 4 } } })}\n\n`, { headers: { "content-type": "text/event-stream" } });
   if (cut === "transient" && (!toolFirst || fetches === 2)) { cut = "none"; return Response.json({ error: { code: "server_is_overloaded" } }, { status: 503 }); }
   if (cut === "afterFetch") { cut = "none"; revoke(); throw new Error("admitted local abort"); }
   if (toolFirst && fetches === 1) {
@@ -113,6 +114,28 @@ test("retry after a completed tool does not rerun the tool or duplicate the answ
  assert.equal(r.final.filter((m) => m.role === "toolResult").length, 1);
  assert.equal(r.final.filter((m) => m.role === "assistant" && m.content.some((b) => b.type === "text" && b.text === "Accepted learner")).length, 1);
  assert(!r.wire.includes('"stopReason":"error"'));
+});
+
+for (const invalidate of [false, true]) test(`ChatGPT continues a silent answer response within the same authorized turn; account invalidation=${invalidate}`, async () => {
+ epoch++; revision++; background = true; cut = "none"; leases = []; fetches = 0; toolFirst = false; silentFirst = true;
+ await refreshChatGPTModels([model]);
+ try {
+  const posed = { role: "assistant", id: "posed", api: "openai-responses", provider: "chatgpt", model: model.id, content: [{ type: "toolCall", id: "question|fc_question", name: "quiz", namespace: "learnharness", arguments: {} }], stopReason: "toolUse", timestamp: 2, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } as LhMessage;
+  const messages = [newUserMessage("Teach me"), posed, newAnswerResult("question|fc_question", "quiz", { kind: "quiz", questionText: "Scratch question", dontKnow: false, answers: [{ index: 1, label: "A", value: "A" }], answeredAt: "2026-11-12T00:00:00Z" })];
+  const purpose = { background: false };
+  const cycle = new ChatGPTRequestCycle({ initialMessages: messages, foregroundOwed: true, purpose, scopeCurrent: chatGPTScopeCurrent, restoreAutomatic: () => {} });
+  const engine = piEngineForSpec({ provider: "chatgpt", id: model.id }, () => purpose.background, cycle);
+  const agent = createTeacherAgent(undefined, { engine, messages, chatId: "scratch-answer", tools: {}, callPurpose: purpose, requestCycle: cycle });
+  if (invalidate) agent.subscribe(event => { if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "stop") revoke(true); });
+  let final: AgentMessage[] = [];
+  const handle = runPiTurn({ agent, requestCycle: cycle, onFinish: messages => { final = messages; } });
+  const wire = await new Response(handle.subscribe()).text();
+  assert.equal(fetches, invalidate ? 1 : 2);
+  assert.equal(final.filter(m => m.role === "user").length, 1);
+  assert.equal(final.filter(m => m.role === "toolResult").length, 1);
+  assert.equal(wire.split('"type":"agent_end"').length, 2);
+  if (!invalidate) { assert.deepEqual(leases, [false, false]); assert(wire.includes("Accepted learner")); }
+ } finally { silentFirst = false; }
 });
 for (const where of ["lease", "payload"] as const) for (const staged of [false, true]) {
  test(`real native drain -> ${where} denial -> same Agent foreground recovery, staged=${staged}`, { timeout: 5000 }, async () => {

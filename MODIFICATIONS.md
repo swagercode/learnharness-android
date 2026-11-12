@@ -30,6 +30,8 @@ The Android distribution adds or changes:
   page frame is ready to draw.
 - Automatic, cancellable ChatGPT connection/service retries in the local
   runtime, preserving consent, account selection, and completed tool work.
+- Answer continuation after silent tutor completions, with a bounded recovery
+  and corrected ordering of the client completion/ready handoff.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:

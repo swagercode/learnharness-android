@@ -191,6 +191,16 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 	// the normal no-observer path (tests, env-off).
 	const providerEvents = opts.chatId ? providerEventObserver(opts.chatId, kind) : undefined;
 	const seenInputs = new Set((opts.messages ?? []).map((m) => (m as { id?: string }).id).filter(Boolean));
+	const initialMessages = opts.messages ?? [];
+	const lastInput = initialMessages.at(-1);
+	// Grading is rendered locally as soon as the learner submits. A clean
+	// but silent completion must not leave that card waiting for a second
+	// learner message. Continue the native conversation, retaining reasoning
+	// and completed tools rather than replaying the submitted answer.
+	let answerReactionOwed = lastInput?.role === "toolResult" &&
+		(QUESTION_TOOLS as readonly string[]).includes(lastInput.toolName) &&
+		nativeInputCause(lastInput, initialMessages.slice(0, -1)) === "learner";
+	let silentAnswerReplies = 0;
 	const agent = new Agent({
 		identity: APP_IDENTITY,
 		sessionId: opts.chatId,
@@ -219,7 +229,19 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		// exits BEFORE the steering poll — the parked-marker stranding our
 		// Wave C registerLiveAgent-before-runPiTurn design depends on.
 		// undefined preserves normal scheduling (the old boolean false).
-		finishTurn: (turn) => (stopper(turn) ? { action: "end" } : undefined),
+		finishTurn: (turn) => {
+			if (stopper(turn)) return { action: "end" };
+			if (!answerReactionOwed || turn.message.stopReason !== "stop") return;
+			if (turn.message.content.some(block => block.type === "text" && block.text.trim())) {
+				answerReactionOwed = false;
+				return;
+			}
+			if (turn.message.content.some(block => block.type === "toolCall")) return; // normal tool continuation
+			if (silentAnswerReplies++ < 2) return { action: "continue" };
+			// Pi emits a normal failed assistant message for hook failures, so
+			// a persistent provider problem stays visible and manually retryable.
+			throw new Error("The tutor returned no reply after your answer, even after continuing automatically. Your answer is saved. Please retry.");
+		},
 		// Wave C (2026-09-26, owner correction same day): markers handed to a
 		// live run drain from pi's STEERING queue — the lesson loop is one
 		// continuous teach→quiz→teach run, so delivery must inject at turn

@@ -324,6 +324,11 @@ function failedTail(messages: readonly LhMessage[]): { ids: Set<string>; before:
 	for (; i >= 0; i--) {
 		const m = messages[i]!;
 		if (m.role === "assistant" && m.stopReason === "error") ids.add(m.id);
+		// A failed answer continuation may follow successful but silent
+		// replies. Keep them on disk; omit them only from a retry's context
+		// so Pi can continue from the saved answer or completed tool result.
+		else if (ids.size > 0 && m.role === "assistant" && m.stopReason === "stop" &&
+			m.content.every(block => block.type === "thinking" || (block.type === "text" && !block.text.trim()))) ids.add(m.id);
 		else if (!(m.role === "custom" && m.customType === "plan-block")) break;
 	}
 	return { ids, before: messages[i] };

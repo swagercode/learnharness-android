@@ -43,6 +43,16 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.12
+
+- Fixes a timing problem after reconnecting that could leave a saved answer
+  waiting for another message before the lesson continued.
+- Continues automatically when the tutor ends an answer response with no text
+  or new question. Two extra continuation attempts are allowed; a persistent
+  failure shows an error and keeps the answer available for Retry.
+- Preserves the submitted answer and completed tools. New questions, Stop,
+  account changes, and consent boundaries still stop continuation.
+
 ## Version 0.4.1-android.11
 
 - Automatically retries temporary ChatGPT connection, rate-limit, and service

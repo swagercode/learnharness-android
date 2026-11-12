@@ -492,6 +492,7 @@ export class SessionModel {
 		this.activeReader = active;
 		let sawEvent = false;
 		let sawDone = false;
+		let settledNotice = false;
 		try {
 			const events = sseEvents(reader);
 			for (;;) {
@@ -508,7 +509,7 @@ export class SessionModel {
 					// The raced-settle terminal: no turn to attach to — the
 					// record is current; the settle hook refetches.
 					sawDone = true;
-					this.onReattachSettled?.();
+					settledNotice = true;
 					return;
 				}
 				const acted = this.applyWireEvent(event);
@@ -527,6 +528,9 @@ export class SessionModel {
 				this.streamingIds = new Set();
 				this.executions = new Map();
 				if (sawDone && this.statusValue !== "error") this.setStatus("ready");
+				// The sync callback can immediately request an owed answer
+				// continuation. Release the ready gate before notifying it.
+				if (settledNotice) this.onReattachSettled?.();
 			}
 		}
 		if (this.consumeAbort !== controller || sawDone) return;

@@ -47,6 +47,23 @@ Install updates signed with the same key over the existing app to preserve data.
 Uninstalling or clearing app data removes local sessions and credentials. Backups
 are disabled so device-bound credentials are not copied to another device.
 
+## Answer continuation in v12
+
+Submitting an answer starts the tutor's reaction without an extra message.
+The client releases its busy gate before notifying the saved-answer continuation
+handler that a turn has settled. A successful but empty, whitespace-only, or
+reasoning-only response after an answer gets up to two additional native
+continuation turns, retaining prior reasoning and completed tool results. A
+persistent silent response becomes a visible, retryable failure. Normal replies,
+new questions, dismissals, and provider errors retain their existing behavior.
+
+This is distinct from HTTP retries: the continuation includes the completed
+response in the conversation. It does not replay the submitted answer or run
+completed tools again. Account/consent checks still apply to every request.
+Regression coverage includes the real SessionModel → input route → agent →
+saved-record flow with fake provider responses, plus the ChatGPT transport with
+fake OAuth credentials. No live provider requests are used by these tests.
+
 ## Automatic ChatGPT retries in v11
 
 Temporary connection failures, server errors, and explicit short-term rate
