@@ -23,6 +23,8 @@ import { quizInputObject, quizInputProblems } from "../core/question-core.ts";
 import { QUESTION_TOOLS, type EnabledTools } from "../core/pending.ts";
 import { toLlmMessages, nativeInputCause, PRACTICE_PROBLEM_TOOL } from "../core/native-messages.ts";
 import type { ChatGPTRequestCycle } from "./chatgpt-request-cycle.ts";
+import { finishLessonTool, ANSWER_FOLLOW_THROUGH, ANSWER_FOLLOW_THROUGH_REMINDER } from "./tools/finish-lesson.ts";
+import { FINISH_LESSON_TOOL, LESSON_CONTINUATION_ERROR, lessonAnswerPending } from "../core/lesson-continuation.ts";
 import { usageWasAdmitted } from "./subscription-request-cycle.ts";
 
 /**
@@ -192,20 +194,15 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 	const providerEvents = opts.chatId ? providerEventObserver(opts.chatId, kind) : undefined;
 	const seenInputs = new Set((opts.messages ?? []).map((m) => (m as { id?: string }).id).filter(Boolean));
 	const initialMessages = opts.messages ?? [];
-	const lastInput = initialMessages.at(-1);
-	// Grading is rendered locally as soon as the learner submits. A clean
-	// but silent completion must not leave that card waiting for a second
-	// learner message. Continue the native conversation, retaining reasoning
-	// and completed tools rather than replaying the submitted answer.
-	let answerReactionOwed = lastInput?.role === "toolResult" &&
-		(QUESTION_TOOLS as readonly string[]).includes(lastInput.toolName) &&
-		nativeInputCause(lastInput, initialMessages.slice(0, -1)) === "learner";
-	let silentAnswerReplies = 0;
+	// An answer owes a complete teaching step, not merely some feedback.
+	// Completed tools stay in context and are never replayed by this loop.
+	let answerReactionOwed = kind !== "practice" && lessonAnswerPending(initialMessages);
+	let incompleteAnswerReplies = 0;
 	const agent = new Agent({
 		identity: APP_IDENTITY,
 		sessionId: opts.chatId,
 		initialState: {
-			systemPrompt,
+			systemPrompt: answerReactionOwed ? `${systemPrompt}\n\n${ANSWER_FOLLOW_THROUGH}` : systemPrompt,
 			model: engine.model,
 			thinkingLevel: engine.level,
 			// Conditional registry inclusion, like the graph-tool gates: when
@@ -213,6 +210,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 			// Match Claude across providers (including OpenRouter), not the API
 			// transport. Explicit test registries remain caller-owned.
 			tools: [
+				...(answerReactionOwed ? [finishLessonTool] : []),
 				...tools.map((tool) => tool.name === "read" && tool.execute === readTool.execute
 					? { ...tool, execute: createReadTool(engine.model).execute as AgentTool<any>["execute"] }
 					: tool),
@@ -231,16 +229,16 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 		// undefined preserves normal scheduling (the old boolean false).
 		finishTurn: (turn) => {
 			if (stopper(turn)) return { action: "end" };
+			const finished = turn.toolResults.some(result => !result.isError &&
+				(result.details as { ok?: boolean } | null)?.ok === true && result.toolName === FINISH_LESSON_TOOL);
+			if (finished) return { action: "end" }; // includes mixed tool batches
+			if (turn.toolResults.some(result => result.toolName === "probe_done" && !result.isError &&
+				(result.details as { ok?: boolean } | null)?.ok === true)) answerReactionOwed = false;
 			if (!answerReactionOwed || turn.message.stopReason !== "stop") return;
-			if (turn.message.content.some(block => block.type === "text" && block.text.trim())) {
-				answerReactionOwed = false;
-				return;
-			}
 			if (turn.message.content.some(block => block.type === "toolCall")) return; // normal tool continuation
-			if (silentAnswerReplies++ < 2) return { action: "continue" };
-			// Pi emits a normal failed assistant message for hook failures, so
-			// a persistent provider problem stays visible and manually retryable.
-			throw new Error("The tutor returned no reply after your answer, even after continuing automatically. Your answer is saved. Please retry.");
+			if (incompleteAnswerReplies++ < 2) return { action: "continue" };
+			// Bounded recovery: never silently settle on feedback or spin forever.
+			throw new Error(LESSON_CONTINUATION_ERROR);
 		},
 		// Wave C (2026-09-26, owner correction same day): markers handed to a
 		// live run drain from pi's STEERING queue — the lesson loop is one
@@ -274,6 +272,14 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 				else if (learner) opts.callPurpose.background = false;
 			}
 			opts.requestCycle?.prepare(request);
+			if (answerReactionOwed && incompleteAnswerReplies > 0) {
+				// Native request context only: no fabricated learner message, no
+				// repeated answer/tool execution, and admission still runs each call.
+				return { context: { ...request.context, messages: request.context.messages.map((message, index) =>
+					index === 0 && message.role === "system"
+						? { ...message, content: `${systemPrompt}\n\n${ANSWER_FOLLOW_THROUGH}\n\n${ANSWER_FOLLOW_THROUGH_REMINDER}` }
+						: message) } };
+			}
 		},
 	});
 	if (opts.onUsage) {

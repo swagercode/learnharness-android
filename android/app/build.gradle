@@ -8,8 +8,8 @@ android {
         applicationId 'ar.com.learnharness'
         minSdk 26
         targetSdk 35
-        versionCode 12
-        versionName '0.4.1-android.12'
+        versionCode 13
+        versionName '0.4.1-android.13'
         externalNativeBuild { cmake { abiFilters 'arm64-v8a', 'x86_64'; arguments '-DANDROID_STL=c++_shared' } }
     }
     externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt'; version '3.22.1' } }

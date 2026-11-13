@@ -16,7 +16,7 @@ process.env.OPENROUTER_API_KEY = "test-key-presence-only";
 fs.writeFileSync(process.env.LH_AUTH_FILE, "{}");
 after(() => fs.rmSync(scratch, { recursive: true, force: true }));
 
-const { createTeacherAgent } = await import("../src/agent/teacher-agent.ts");
+const { createTeacherAgent, bareQuestionTools } = await import("../src/agent/teacher-agent.ts");
 const { handleChatRequest } = await import("../src/server/chat-handler.ts");
 const { chatStore } = await import("../src/store/chats.ts");
 const { runningTurn, settledTurnResponse, turnFailure } = await import("../src/server/turn-runs.ts");
@@ -30,7 +30,13 @@ const { questionResult } = await import("../src/agent/tool-execute.ts");
 const input = { question: "What are the updated predictions for A and B?", options: [{ label: "A: 20; B: 20." }, { label: "A: 170; B: 200." }], correctAnswer: "A: 170; B: 200.", explanation: "Add each new output to its existing prediction.", type: "check", nodeId: "predictions" };
 const answer = buildAnswer({ id: "question", kind: "quiz", question: input.question, options: normalizeOptions(input.options), correctIndices: [2], mode: "single-select", createdAt: "fixture" }, { values: ["A: 170; B: 200."], confidence: 90 });
 
-function fixture(steps: FauxResponseStep[], tools: AgentBuildOptions["tools"] = {}) {
+const nextQuestion = () => fauxAssistantMessage([fauxText("Now use the next step."), fauxToolCall("quiz", input, { id: "next-question" })], { stopReason: "toolUse" });
+const finish = (reason: "learning_goal_completed" | "learner_requested_pause" = "learning_goal_completed") => fauxAssistantMessage([
+	fauxText(reason === "learning_goal_completed" ? "You have completed your learning goal." : "We will pause here."),
+	fauxToolCall("finish_lesson", { reason }, { id: "finished" }),
+], { stopReason: "toolUse" });
+
+function fixture(steps: FauxResponseStep[], tools: AgentBuildOptions["tools"] = bareQuestionTools()) {
 	const faux = createFauxCore({}); let calls = 0;
 	faux.setResponses(steps.map(step => (...args) => { calls++; return typeof step === "function" ? step(...args) : step; }));
 	const engine = { model: faux.getModel(), streamFn: faux.streamSimple };
@@ -52,31 +58,49 @@ function fixture(steps: FauxResponseStep[], tools: AgentBuildOptions["tools"] = 
 
 for (const content of [[], [fauxText(" \n ")], [fauxThinking("The learner answered correctly.")]]) {
 	test(`a silent response after Submit continues without another learner message: ${content[0]?.type ?? "empty"}`, async () => {
-		const f = fixture([fauxAssistantMessage(content), fauxAssistantMessage([fauxText("Correct. Let’s use those updated predictions.")])]);
+		const f = fixture([fauxAssistantMessage(content), nextQuestion()]);
 		await f.model.submitAnswer("quiz", "question", answer);
 		assert.equal(f.model.getState().error, null);
-		assert.equal(f.calls(), 2, "a silent completion still owes the answer a visible response");
+		assert.equal(f.calls(), 2, "a silent completion still owes the next question");
 		assert.equal(f.posts.length, 1); assert.equal(JSON.parse(f.posts[0]!).input.type, "answer");
 		assert.equal(f.saved().filter(m => m.role === "user").length, 1, "no invented extra learner message");
 		assert.equal(f.saved().filter(m => m.role === "toolResult").length, 1, "the answer is submitted once");
-		assert(f.saved().some(m => m.role === "assistant" && m.content.some(b => b.type === "text" && b.text.startsWith("Correct."))));
-		assert.equal(pendingQuestionOf(f.saved()), null); assert.equal(f.model.status, "ready");
+		assert(f.saved().some(m => m.role === "assistant" && m.content.some(b => b.type === "text" && b.text.startsWith("Now use"))));
+		assert.equal(pendingQuestionOf(f.saved())?.toolCallId, "next-question"); assert.equal(f.model.status, "ready");
 		assert.equal(isTurnRunning(f.chat.id), false);
 	});
 }
 
-test("a normal answer reaction uses one request", async () => {
-	const f = fixture([fauxAssistantMessage([fauxText("Correct.")])]);
+test("feedback-only response continues to a new question without a period or another tap", async () => {
+	const feedback = "Each example still receives +20, so every updated prediction stays identical. That distinction will matter in XGBoost.";
+	const f = fixture([
+		fauxAssistantMessage([fauxText(feedback)]),
+		(context) => {
+			assert.match(context.messages.filter(m => m.role === "system").map(m => m.content).join("\n"), /previous response stopped without a new question/);
+			assert(context.messages.some(m => m.role === "assistant" && m.content.some(b => b.type === "text" && b.text === feedback)), "retain the feedback instead of replaying the answer");
+			return nextQuestion();
+		},
+	]);
 	await f.model.submitAnswer("quiz", "question", answer);
 	assert.equal(f.model.getState().error, null);
-	assert.equal(f.calls(), 1); assert.equal(f.posts.length, 1);
+	assert.equal(f.calls(), 2); assert.equal(f.posts.length, 1);
+	assert.equal(pendingQuestionOf(f.saved())?.toolCallId, "next-question");
+	assert.equal(f.saved().filter(m => m.role === "user").length, 1);
+	assert.equal(f.saved().filter(m => m.role === "toolResult" && m.toolCallId === "question").length, 1);
+});
+
+for (const reason of ["learning_goal_completed", "learner_requested_pause"] as const) test(`an explicit ${reason} ends cleanly without another question`, async () => {
+	const f = fixture([finish(reason)]);
+	await f.model.submitAnswer("quiz", "question", answer);
+	assert.equal(f.calls(), 1); assert.equal(f.model.getState().error, null);
+	assert.equal(pendingQuestionOf(f.saved()), null);
 });
 
 test("persistent silent responses stop after two continuations with a visible, retryable error", async () => {
-	const f = fixture([fauxAssistantMessage([]), fauxAssistantMessage([fauxThinking("Still considering it.")]), fauxAssistantMessage([]), fauxAssistantMessage([fauxText("Correct, let’s continue.")])]);
+	const f = fixture([fauxAssistantMessage([]), fauxAssistantMessage([fauxThinking("Still considering it.")]), fauxAssistantMessage([]), nextQuestion()]);
 	await f.model.submitAnswer("quiz", "question", answer);
 	assert.equal(f.calls(), 3); assert.equal(isTurnRunning(f.chat.id), false);
-	assert.match(f.model.getState().error?.message ?? "", /no reply after your answer/);
+	assert.match(f.model.getState().error?.message ?? "", /did not provide the next lesson step/);
 	const before = structuredClone(f.saved());
 	assert.equal(endsInFailedTurn(before), true);
 	await f.model.send({ type: "retry" });
@@ -104,8 +128,8 @@ test("continuing a silent reply after tool work does not repeat the tool", async
 	let executions = 0;
 	const f = fixture([
 		fauxAssistantMessage([fauxToolCall("work", {}, { id: "work-once" })], { stopReason: "toolUse" }),
-		fauxAssistantMessage([]), fauxAssistantMessage([fauxText("Here is the next step.")]),
-	], { work: { name: "work", label: "work", description: "Fixture work", parameters: Type.Object({}), execute: async () => { executions++; return { content: [{ type: "text", text: "Finished work" }], details: {} }; } } });
+		fauxAssistantMessage([]), nextQuestion(),
+	], { ...bareQuestionTools(), work: { name: "work", label: "work", description: "Fixture work", parameters: Type.Object({}), execute: async () => { executions++; return { content: [{ type: "text", text: "Finished work" }], details: {} }; } } });
 	await f.model.submitAnswer("quiz", "question", answer);
 	assert.equal(f.calls(), 3); assert.equal(executions, 1);
 	assert.equal(f.saved().filter(m => m.role === "toolResult" && m.toolName === "work").length, 1);
@@ -123,4 +147,65 @@ test("ordinary messages do not enable the answer-only continuation rule", async 
 	const f = fixture([fauxAssistantMessage([])]);
 	await f.model.send({ type: "text", text: "A separate instruction" });
 	assert.equal(f.calls(), 1);
+});
+
+
+test("repeated feedback cannot silently settle and its bounded failure is retryable", async () => {
+	const f = fixture([fauxAssistantMessage([fauxText("Correct.")]), fauxAssistantMessage([fauxText("This will matter next.")]), fauxAssistantMessage([fauxText("Let us continue.")]), nextQuestion()]);
+	await f.model.submitAnswer("quiz", "question", answer);
+	assert.equal(f.calls(), 3);
+	assert.match(f.model.getState().error?.message ?? "", /did not provide the next lesson step/);
+	const before = structuredClone(f.saved());
+	assert(endsInFailedTurn(before));
+	await f.model.send({ type: "retry" });
+	assert.equal(f.calls(), 4); assert.equal(f.model.getState().error, null);
+	assert.equal(pendingQuestionOf(f.saved())?.toolCallId, "next-question");
+	assert.deepEqual(f.saved().slice(0, before.length), before);
+	assert.equal(f.saved().filter(m => m.role === "toolResult" && m.toolCallId === "question").length, 1);
+});
+
+test("a failed question is repaired, then pauses at the valid question", async () => {
+	const f = fixture([
+		fauxAssistantMessage([fauxText("Correct.")]),
+		fauxAssistantMessage([fauxToolCall("quiz", { question: "Missing choices" }, { id: "bad-question" })], { stopReason: "toolUse" }),
+		nextQuestion(),
+	]);
+	await f.model.submitAnswer("quiz", "question", answer);
+	assert.equal(f.calls(), 3); assert.equal(f.model.getState().error, null);
+	assert.equal(pendingQuestionOf(f.saved())?.toolCallId, "next-question");
+});
+
+test("a completed probe handoff does not force another question in the old phase", async () => {
+	const f = fixture([
+		fauxAssistantMessage([fauxToolCall("probe_done", {}, { id: "handoff" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxText("The teaching plan is next.")]),
+	], { probe_done: { name: "probe_done", label: "probe_done", description: "Fixture handoff", parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "Handed off" }], details: { ok: true } }) } });
+	await f.model.submitAnswer("quiz", "question", answer);
+	assert.equal(f.calls(), 2); assert.equal(f.model.getState().error, null);
+});
+
+
+test("a provider failure after feedback still offers Retry without resubmitting the answer", async () => {
+	const f = fixture([fauxAssistantMessage([fauxText("Correct, the split leaves the predictions unchanged.")]), fauxAssistantMessage([], { stopReason: "error", errorMessage: "ChatGPT API failed" }), nextQuestion()]);
+	await f.model.submitAnswer("quiz", "question", answer);
+	assert.equal(f.calls(), 2); assert(endsInFailedTurn(f.saved()));
+	const before = structuredClone(f.saved());
+	await f.model.send({ type: "retry" });
+	assert.equal(f.calls(), 3); assert.equal(f.model.getState().error, null);
+	assert.equal(pendingQuestionOf(f.saved())?.toolCallId, "next-question");
+	assert.deepEqual(f.saved().slice(0, before.length), before);
+});
+
+test("retry after completed tool work still owes the next question and never repeats the work", async () => {
+	let executions = 0;
+	const f = fixture([
+		fauxAssistantMessage([fauxToolCall("work", {}, { id: "work-once" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxText("Correct.")]), fauxAssistantMessage([fauxText("Let’s continue.")]), fauxAssistantMessage([]), nextQuestion(),
+	], { ...bareQuestionTools(), work: { name: "work", label: "work", description: "Fixture work", parameters: Type.Object({}), execute: async () => { executions++; return { content: [{ type: "text", text: "Finished work" }], details: {} }; } } });
+	await f.model.submitAnswer("quiz", "question", answer);
+	assert.equal(f.calls(), 4); assert(endsInFailedTurn(f.saved()));
+	await f.model.send({ type: "retry" });
+	assert.equal(f.calls(), 5); assert.equal(executions, 1);
+	assert.equal(pendingQuestionOf(f.saved())?.toolCallId, "next-question");
+	assert.equal(f.model.getState().error, null);
 });

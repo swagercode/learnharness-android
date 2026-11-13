@@ -28,6 +28,7 @@
  * turn rides one composition.
  */
 
+import { lessonAnswerPending } from "./lesson-continuation.ts";
 import type { QuestionAnswerData } from "./question-core.ts";
 import type { LhMessage } from "./native-messages.ts";
 import {
@@ -320,15 +321,17 @@ export function retryDrops(messages: readonly LhMessage[]): Set<string> {
  * can still retry: that compacted context was already its starting state. */
 function failedTail(messages: readonly LhMessage[]): { ids: Set<string>; before: LhMessage | undefined } {
 	const ids = new Set<string>();
+	const incompleteLesson = lessonAnswerPending(messages);
 	let i = messages.length - 1;
 	for (; i >= 0; i--) {
 		const m = messages[i]!;
 		if (m.role === "assistant" && m.stopReason === "error") ids.add(m.id);
 		// A failed answer continuation may follow successful but silent
-		// replies. Keep them on disk; omit them only from a retry's context
+		// replies (or feedback-only replies before a failed lesson continuation).
+		// Keep them on disk; omit them only from a retry's context
 		// so Pi can continue from the saved answer or completed tool result.
 		else if (ids.size > 0 && m.role === "assistant" && m.stopReason === "stop" &&
-			m.content.every(block => block.type === "thinking" || (block.type === "text" && !block.text.trim()))) ids.add(m.id);
+			m.content.every(block => block.type === "thinking" || (block.type === "text" && (incompleteLesson || !block.text.trim())))) ids.add(m.id);
 		else if (!(m.role === "custom" && m.customType === "plan-block")) break;
 	}
 	return { ids, before: messages[i] };

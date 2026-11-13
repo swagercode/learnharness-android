@@ -132,7 +132,7 @@ describe("failed-response Retry (issue #110)", () => {
 		const { engine, contexts, histories } = scripted([
 			() => fauxAssistantMessage([fauxToolCall("quiz", QUIZ_INPUT, { id: "call-1" })], { stopReason: "toolUse" }),
 			networkFailure,
-			() => fauxAssistantMessage([fauxText("Right — Mercury it is.")]),
+			() => fauxAssistantMessage([fauxText("Right — Mercury it is."), fauxToolCall("quiz", QUIZ_INPUT, { id: "call-next" })], { stopReason: "toolUse" }),
 		]);
 		const chat = createConfiguredChat("Test: retry after failed answer");
 		const answer = gradedAnswer();

@@ -43,6 +43,16 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.13
+
+- Continues past answer feedback to the next lesson question automatically.
+  Feedback alone no longer ends the response.
+- Gives the tutor an explicit continuation instruction if it stops early,
+  retaining prior feedback and completed tool work during automatic recovery.
+- Stops cleanly at a new question, an explicitly requested pause, or a completed
+  learning goal. Recovery is bounded; persistent failures remain visible and
+  retryable without losing the submitted answer.
+
 ## Version 0.4.1-android.12
 
 - Fixes a timing problem after reconnecting that could leave a saved answer

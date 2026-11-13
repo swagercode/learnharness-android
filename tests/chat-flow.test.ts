@@ -94,7 +94,7 @@ function defaultLesson(calls: string[][]): FauxResponseStep[] {
 		},
 		(context) => {
 			calls.push(context.messages.map((m) => JSON.stringify((m as { content: unknown }).content)));
-			return fauxAssistantMessage([fauxText("Right — Mercury it is.")]);
+			return fauxAssistantMessage([fauxText("Right — Mercury it is."), fauxToolCall("quiz", { ...QUIZ_INPUT, question: "Which planet comes after Mercury?", correctAnswer: "Venus", explanation: "Venus is next after Mercury." }, { id: "call-2" })], { stopReason: "toolUse" });
 		},
 	];
 }
@@ -350,8 +350,8 @@ describe("teacher chat flow (scripted model)", () => {
 		const toolResultSent = calls[1]!.some((c) => c.includes("toolResult") || c.includes("Mercury"));
 		assert.ok(toolResultSent, "continuation prompt carries the tool result to the model");
 
-		// No pending question remains.
-		assert.equal(danglingQuestionOf(saved2.messages), null);
+		// Feedback advances to the next question in the same response.
+		assert.equal(danglingQuestionOf(saved2.messages)?.toolCallId, "call-2");
 	});
 
 	it("rejects unknown chats", async () => {

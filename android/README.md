@@ -47,7 +47,23 @@ Install updates signed with the same key over the existing app to preserve data.
 Uninstalling or clearing app data removes local sessions and credentials. Backups
 are disabled so device-bound credentials are not copied to another device.
 
-## Answer continuation in v12
+## Lesson follow-through in v13
+
+After an answer, the tutor must advance to another question or explicitly finish
+because the learner requested a pause or completed their learning goal. Feedback
+alone does not settle the response. If the tutor stops early, up to two native
+continuations carry a specific system instruction to proceed from the feedback
+already shown, without repeating the answer or completed tools. The same run
+remains active until the next question is ready, including in the background.
+The prober's successful handoff also ends this obligation in the old phase.
+
+Persistent failures show an error with Retry. Existing answers, feedback, and
+completed tool results stay saved. Retry omits trailing incomplete feedback only
+from its temporary context, so it can resume from the saved answer or completed
+tool result. Explicit Stop, dismissals, account changes, and permission checks
+retain their existing behavior.
+
+## Answer continuation in v12 (superseded by v13)
 
 Submitting an answer starts the tutor's reaction without an extra message.
 The client releases its busy gate before notifying the saved-answer continuation

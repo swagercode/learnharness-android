@@ -32,6 +32,8 @@ The Android distribution adds or changes:
   runtime, preserving consent, account selection, and completed tool work.
 - Answer continuation after silent tutor completions, with a bounded recovery
   and corrected ordering of the client completion/ready handoff.
+- Lesson follow-through beyond feedback to a new question, with explicit
+  pause/completion and bounded, retryable recovery.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:
