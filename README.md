@@ -43,6 +43,13 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.14
+
+- Fixes greyed-out text, Markdown, and PDF files in Android's import picker.
+- Preserves backup ZIP selection and Deepgram key text-file selection.
+- Makes emulator validation handle notification permissions and transient UI
+  snapshots before testing native file selection.
+
 ## Version 0.4.1-android.13
 
 - Continues past answer feedback to the next lesson question automatically.

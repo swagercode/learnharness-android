@@ -11,10 +11,17 @@ await fs.mkdir(artifacts, { recursive: true });
 const adb = (...args) => execFileSync("adb", args, { encoding: "utf8", timeout: args[0] === "install" ? 180000 : 20000 });
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function tapDocumentUi(attribute, value) {
-	for (let i = 0; i < 8; i++) {
-		adb("shell", "uiautomator", "dump", "/sdcard/lh-picker.xml");
-		const xml = adb("shell", "cat", "/sdcard/lh-picker.xml");
-		const node = [...xml.matchAll(/<node\b[^>]*>/g)].map((match) => match[0]).find((node) => node.includes(`${attribute}="${value}"`));
+	for (let i = 0; i < 12; i++) {
+		// UIAutomator can exit 0 with "null root node" while an activity
+		// opens. Never read a missing or stale dump as if it were current.
+		let xml;
+		try {
+			adb("shell", "rm", "-f", "/sdcard/lh-picker.xml");
+			adb("shell", "uiautomator", "dump", "/sdcard/lh-picker.xml");
+			xml = adb("shell", "cat", "/sdcard/lh-picker.xml");
+			await fs.writeFile(path.join(artifacts, "picker.xml"), xml);
+		} catch { await pause(500); continue; }
+		const node = [...xml.matchAll(/<node\b[^>]*>/g)].map((match) => match[0]).find((node) => node.includes(`${attribute}="${value}"`) && !node.includes('enabled="false"'));
 		const bounds = node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
 		if (bounds) { adb("shell", "input", "tap", String(Math.floor((+bounds[1] + +bounds[3]) / 2)), String(Math.floor((+bounds[2] + +bounds[4]) / 2))); return; }
 		await pause(500);
@@ -65,7 +72,13 @@ async function start() {
 	return { request, origin };
 }
 try {
-	adb("install", "-r", "android/app/build/outputs/apk/debug/app-x86_64-debug.apk");
+	adb("install", "-r", process.env.LH_ANDROID_SMOKE_APK ?? "android/app/build/outputs/apk/debug/app-x86_64-debug.apk");
+	// This disposable emulator is testing file selection, not onboarding.
+	// Grant only notifications before launch so its native permission dialog
+	// cannot cover the WebView while Puppeteer clicks underneath it.
+	if (Number(adb("shell", "getprop", "ro.build.version.sdk").trim()) >= 33) {
+		adb("shell", "pm", "grant", app, "android.permission.POST_NOTIFICATIONS");
+	}
 	adb("shell", "wm", "size", "1600x2560"); adb("shell", "wm", "density", "320");
 	adb("shell", "settings", "put", "system", "accelerometer_rotation", "0");
 	adb("shell", "settings", "put", "system", "user_rotation", "0");

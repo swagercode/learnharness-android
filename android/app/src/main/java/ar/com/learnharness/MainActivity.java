@@ -94,9 +94,8 @@ public final class MainActivity extends Activity {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
                 fileCallback = callback;
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
-                List<String> accepted = new ArrayList<>(Arrays.asList(params.getAcceptTypes()));
-                accepted.add("application/zip"); accepted.add("application/x-zip-compressed"); accepted.add("application/octet-stream");
-                String[] types = accepted.stream().filter(t -> t.contains("/")).distinct().toArray(String[]::new);
+                String[] types = FilePickerTypes.fromAcceptTypes(params.getAcceptTypes(),
+                    extension -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension));
                 if (types.length > 0) intent.putExtra(Intent.EXTRA_MIME_TYPES, types);
                 intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
                 try { startActivityForResult(intent, FILE_PICKER); }

@@ -47,6 +47,19 @@ Install updates signed with the same key over the existing app to preserve data.
 Uninstalling or clearing app data removes local sessions and credentials. Backups
 are disabled so device-bound credentials are not copied to another device.
 
+## File selection and validation in v14
+
+Android's document picker now accepts the text, Markdown, and PDF formats offered
+by Import notes, including extension-based HTML filters. Deepgram text-key files
+and ZIP session backups retain their own filters. Unknown extensions fall back
+to an unrestricted picker; the importing feature still validates the selection.
+
+The emulator smoke test grants notification permission on its disposable device
+before launching the app, retries transient missing UI snapshots, and verifies
+that the selected file's contents actually reach the WebView. Local ARM64 smoke
+runs can set `ANDROID_SERIAL` and `LH_ANDROID_SMOKE_APK` to a disposable emulator
+and the matching debug APK; CI defaults to its x86_64 tablet emulator.
+
 ## Lesson follow-through in v13
 
 After an answer, the tutor must advance to another question or explicitly finish

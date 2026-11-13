@@ -34,6 +34,8 @@ The Android distribution adds or changes:
   and corrected ordering of the client completion/ready handoff.
 - Lesson follow-through beyond feedback to a new question, with explicit
   pause/completion and bounded, retryable recovery.
+- Correct conversion of HTML file extensions into Android MIME filters,
+  plus reliable notification and file-picker setup in emulator validation.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:
