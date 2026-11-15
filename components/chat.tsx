@@ -804,6 +804,30 @@ export function Chat({
 		continueIfOwed(record.messages);
 	}, [chatId, setMessages, continueIfOwed]);
 
+	const [checkingSync, setCheckingSync] = useState(false);
+	const refreshAfterSync = useRef(syncFromServer);
+	refreshAfterSync.current = syncFromServer;
+	useEffect(() => {
+		let active = true, checking = false;
+		const check = async () => {
+			if (checking || document.visibilityState === "hidden") return;
+			checking = true; setCheckingSync(true);
+			try {
+				const response = await fetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ action: "before-edit", chatId }), signal: AbortSignal.timeout(6500) });
+				if (response.ok && active) {
+					const result = await response.json();
+					if (result.synced) await refreshAfterSync.current();
+				}
+			} catch { /* Offline work stays available; the runtime retries later. */ }
+			finally { checking = false; if (active) setCheckingSync(false); }
+		};
+		void check();
+		window.addEventListener("focus", check); window.addEventListener("online", check);
+		document.addEventListener("visibilitychange", check);
+		return () => { active = false; window.removeEventListener("focus", check); window.removeEventListener("online", check); document.removeEventListener("visibilitychange", check); };
+	}, [chatId]);
+
 	// The settled terminal's other half (stream-reattach wave): the
 	// transport resolved turn-settled — no turn running, the record is
 	// current. Drop the fallback busy state and adopt the record (its
@@ -1277,7 +1301,8 @@ export function Chat({
 		    chip) spans from the left sidebar's edge to the panel's edge. The
 		    dock overlays the column bottom (outside the scroller); a spacer in
 		    the transcript reserves its height. */}
-		<div className="flex h-dvh">
+		{checkingSync && <div role="status" className="fixed left-1/2 top-2 z-[60] -translate-x-1/2 rounded-full border bg-background px-3 py-1 text-xs shadow">Syncing session…</div>}
+		<div className="flex h-dvh" inert={checkingSync || undefined} aria-busy={checkingSync}>
 			<div className="flex min-w-0 flex-1 flex-col">
 				{/* The top bar is its own block (owner, top-fade round 4): in flow
 				    above the scroller on the plain page background — no gradient. Its

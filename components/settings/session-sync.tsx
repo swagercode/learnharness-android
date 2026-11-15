@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 import { SYNC_REVIEW_EVENT, SYNC_STATUS_EVENT } from "../session-sync-events";
 
-interface Status { mode: "off" | "host" | "client"; canHost: boolean; url?: string; busy?: boolean; lastSync?: string; error?: string; conflicts?: number; deferred?: number; code?: string }
+interface Status { mode: "off" | "host" | "client"; canHost: boolean; url?: string; busy?: boolean; lastSync?: string; error?: string; initialRequired?: boolean; initialComplete?: boolean; initialSource?: "phone" | "mac"; deferred?: number; code?: string }
 export function SessionSync() {
 	const [status, setStatus] = useState<Status>();
+	const [source, setSource] = useState<"phone" | "mac">("phone");
 	const [code, setCode] = useState("");
 	const [address, setAddress] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -29,7 +30,7 @@ export function SessionSync() {
 		if (busy) return;
 		setBusy(true); setError(undefined); setCopied(false);
 		try {
-			const response = await fetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, code, address }) });
+			const response = await fetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, code, address, source }) });
 			const result = await response.json();
 			if (!response.ok) throw new Error(result.error ?? "Sync could not complete.");
 			setStatus(result); if (action === "connect" || action === "disconnect") setCode("");
@@ -47,6 +48,12 @@ export function SessionSync() {
 					<textarea value={code} onChange={event => setCode(event.target.value)} placeholder="lh-sync-1:…" autoComplete="off" spellCheck={false} rows={2}
 						className="mt-2 block w-full min-w-0 resize-y rounded-md border bg-background p-3 text-base [overflow-wrap:anywhere]" data-testid="sync-pairing-input" />
 				</label>
+				<label className="block text-sm">First sync source for shared sessions
+					<select value={source} onChange={event => setSource(event.target.value as "phone" | "mac")} className="mt-2 block min-h-11 w-full min-w-0 rounded-md border bg-background px-3 text-base">
+						<option value="phone">Upload phone to Mac</option><option value="mac">Use Mac versions</option>
+					</select>
+				</label>
+				<p className="text-xs text-muted-foreground">Sessions on only one device are kept and copied to the other.</p>
 				<button type="button" className={button} disabled={!code.trim() || busy} onClick={() => void action("connect")}>Connect to Mac</button>
 				{status.canHost && <details className="min-w-0 rounded-md border p-3">
 					<summary className="cursor-pointer text-sm">Use this Mac as the sync host</summary>
@@ -61,10 +68,11 @@ export function SessionSync() {
 				<p className="break-all text-xs text-muted-foreground">{status.url}</p>
 				<p role="status" className="text-sm">{status.busy ? "Syncing…" : status.lastSync ? `Last synced ${new Date(status.lastSync).toLocaleString()}` : status.mode === "host" ? "Ready for your phone to connect." : "Waiting for first sync…"}</p>
 				{!!status.deferred && <p className="text-xs text-muted-foreground">Some sessions are still working or changed during sync. They will retry automatically.</p>}
-				{!!status.conflicts && <div className="space-y-2 rounded-md border p-3">
-					<p className="text-sm">{status.conflicts === 1 ? "A session needs" : `${status.conflicts} sessions need`} your choice before syncing. Use the Mac version or upload the phone version to Mac.</p>
-					<button type="button" className={button} onClick={() => window.dispatchEvent(new Event(SYNC_REVIEW_EVENT))}>Choose sync source</button>
+				{status.initialRequired && <div className="space-y-2 rounded-md border p-3">
+					<p className="text-sm">Choose a source once for your first sync. After that, each session uses its latest saved version.</p>
+					<button type="button" className={button} onClick={() => window.dispatchEvent(new Event(SYNC_REVIEW_EVENT))}>Choose first sync source</button>
 				</div>}
+				{status.mode === "client" && !status.initialRequired && !status.initialComplete && <p className="text-xs text-muted-foreground">First sync will use the {status.initialSource === "phone" ? "phone’s" : "Mac’s"} version for shared sessions. It resumes automatically when connected.</p>}
 				<div className="flex flex-wrap gap-2">
 					{status.mode === "client" && <button type="button" className={button} onClick={() => void action("now")}>Sync now</button>}
 					{status.mode === "host" && <button type="button" className={button} onClick={() => void action("pairing")}>Show pairing code</button>}
@@ -78,6 +86,6 @@ export function SessionSync() {
 			</>}
 		</fieldset>}
 		{(error || status?.error) && <p role="alert" className="mt-3 break-words text-sm text-red-500">{error || status?.error}</p>}
-		<p className="mt-3 text-xs text-muted-foreground">Sync includes sessions, plans, completed research and demos. Changes made offline sync when connected again. If both devices edit a session, you choose which version to keep. Deletions, the knowledge graph, original files, app preferences, API keys and sign-ins stay on each device.</p>
+		<p className="mt-3 text-xs text-muted-foreground">Sync includes sessions, plans, completed research and demos. Sync checks before you edit when the other device is reachable. Offline work is allowed; the latest saved version of each session syncs in both directions when connected again. Deletions, the knowledge graph, original files, app preferences, API keys and sign-ins stay on each device.</p>
 	</section>;
 }

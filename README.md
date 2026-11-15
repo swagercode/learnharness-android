@@ -45,14 +45,17 @@ foreground-service time budget; see [background behavior](android/README.md).
 
 ## Version 0.4.1-android.18
 
-- Conflicting sessions wait for you to choose **Use Mac version** or **Upload to
-  Mac**. A phone dialog explains which copy will be replaced; **Later** leaves
-  the conflict pending. You can reopen it in Settings → General → Session sync.
-- Other sessions keep syncing. Choices survive interruptions and are checked
-  against the versions you reviewed, so newer edits are never silently replaced.
-- Each replaced session keeps a private recovery copy. Existing v17 conflict-copy
-  sessions remain intact; new conflicts do not create duplicate sessions.
-- Works with the v17 Mac sync companion and your existing pairing code.
+- First sync uses your selected device for shared sessions; **Upload phone to
+  Mac** is the default. Sessions on just one device copy to the other.
+- Afterward, sync runs automatically both ways. If both devices changed a
+  session offline, its latest saved version wins; other sessions are independent.
+- Both apps check sync before opening/editing a session. The updated Mac
+  companion can ask a connected phone to send its latest saved work first.
+- Offline editing stays available when the peer cannot be reached. Reconnection
+  retries automatically. The previous three replaced versions stay in private
+  recovery history; existing v17 conflict copies stay intact.
+- Requires the v18 Mac companion for Mac pre-edit checks. Your pairing code stays
+  the same. Version 14 teaching prompts and optional Astra Fast mode are unchanged.
 
 ## Version 0.4.1-android.17
 

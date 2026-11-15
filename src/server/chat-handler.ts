@@ -183,6 +183,8 @@ export async function handleChatRequest(
 		}
 		throw err;
 	}
+	const { prepareSessionEdit } = await import("./session-sync.ts");
+	await prepareSessionEdit(chatId);
 	return handleChatInput(chatId, input, buildAgent);
 }
 

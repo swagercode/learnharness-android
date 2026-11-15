@@ -15,9 +15,11 @@ const processes = new Map();
 const pause = ms => new Promise(done => setTimeout(done, ms));
 const folder = name => path.join(root, name, "data");
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); }
-function chat(id, title) { return { id, version: 1, title, createdAt: "2026-01-01", updatedAt: "2026-01-01", messages: [], settings: { model: { provider: "chatgpt", id: "gpt-6-astra" }, thinkingLevel: "low", fastMode: true } }; }
+function chat(id, title, updatedAt = "2026-01-01") { return { id, version: 1, title, createdAt: "2026-01-01", updatedAt, messages: [], settings: { model: { provider: "chatgpt", id: "gpt-6-astra" }, thinkingLevel: "low", fastMode: true } }; }
 write(path.join(folder("mac"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Mac fixture"));
 write(path.join(folder("phone"), "chats/chat_phone_fixture.json"), chat("chat_phone_fixture", "Phone fixture"));
+write(path.join(folder("mac"), "chats/chat_shared.json"), chat("chat_shared", "Mac first"));
+write(path.join(folder("phone"), "chats/chat_shared.json"), chat("chat_shared", "Phone first"));
 write(path.join(folder("mac"), "sync-private/config.json"), { mode: "host", ...connection });
 const ports = { mac: 3231, phone: 3232 };
 async function rpc(name, body) {
@@ -47,35 +49,46 @@ async function settled() {
 try {
 	assert.equal((await start("mac")).mode, "host"); await start("phone");
 	const code = "lh-sync-1:" + Buffer.from(JSON.stringify(connection)).toString("base64url");
-	await rpc("phone", { action: "connect", code }); await settled();
+	await rpc("phone", { action: "connect", code, source: "phone" }); await settled();
 	for (const device of ["phone", "mac"]) for (const id of ["chat_mac_fixture", "chat_phone_fixture"]) assert(fs.existsSync(path.join(folder(device), `chats/${id}.json`)));
 	console.log("PASS production apps synchronize both ways through private Tailscale HTTPS");
-	write(path.join(folder("mac"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Mac offline change"));
-	write(path.join(folder("phone"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Phone offline change"));
-	await rpc("phone", { action: "now" }); let status = await settled(); assert.equal(status.conflicts, 1);
-	const read = device => JSON.parse(fs.readFileSync(path.join(folder(device), "chats/chat_mac_fixture.json")));
-	assert.equal(read("phone").title, "Phone offline change"); assert.equal(read("mac").title, "Mac offline change");
-	for (const device of ["phone", "mac"]) assert.equal(fs.readdirSync(path.join(folder(device), "chats")).length, 2);
-	await stop("phone"); await start("phone"); status = await settled();
-	assert.equal(status.pending.length, 1);
-	console.log("PASS conflicts survive restart without replacing either version or adding duplicate sessions");
-	await rpc("phone", { action: "resolve", resolution: { ...status.pending[0], source: "mac" } });
-	assert.equal((await settled()).conflicts, 0);
-	assert.equal(read("phone").title, "Mac offline change"); assert.equal(read("mac").title, "Mac offline change");
-	write(path.join(folder("phone"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Phone wins next"));
-	write(path.join(folder("mac"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Mac edited again"));
-	await rpc("phone", { action: "now" }); status = await settled();
-	await rpc("phone", { action: "resolve", resolution: { ...status.pending[0], source: "phone" } });
-	assert.equal((await settled()).conflicts, 0);
-	assert.equal(read("phone").title, "Phone wins next"); assert.equal(read("mac").title, "Phone wins next");
-	for (const device of ["phone", "mac"]) assert.equal(fs.readdirSync(path.join(folder(device), "chats")).length, 2);
-	console.log("PASS explicit Mac and phone source choices converge with private recovery copies");
+	const read = (device, id = "chat_mac_fixture") => JSON.parse(fs.readFileSync(path.join(folder(device), `chats/${id}.json`)));
+	assert.equal(read("mac", "chat_shared").title, "Phone first");
+	assert.equal((await rpc("phone")).initialComplete, true);
+	console.log("PASS first sync uses phone for shared IDs and retains unique sessions");
+	write(path.join(folder("mac"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Mac newer", "2026-11-15T12:00:00Z"));
+	write(path.join(folder("phone"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Phone older", "2026-11-15T11:00:00Z"));
+	write(path.join(folder("mac"), "chats/chat_phone_fixture.json"), chat("chat_phone_fixture", "Mac older", "2026-11-15T11:00:00Z"));
+	write(path.join(folder("phone"), "chats/chat_phone_fixture.json"), chat("chat_phone_fixture", "Phone newer", "2026-11-15T12:00:00Z"));
+	await rpc("phone", { action: "now" }); await settled();
+	for (const device of ["phone", "mac"]) {
+		assert.equal(read(device).title, "Mac newer"); assert.equal(read(device, "chat_phone_fixture").title, "Phone newer");
+		assert.equal(fs.readdirSync(path.join(folder(device), "chats")).length, 3);
+	}
+	console.log("PASS offline divergence chooses the latest version separately per session without duplicates");
+	// Direct disk edits bypass the app's event-triggered upload. The Mac pre-edit
+	// request must wake the phone and flush before it returns, not rely on 30s polling.
+	await pause(1500);
+	write(path.join(folder("phone"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Phone flush before Mac edit", "2026-11-15T13:00:00Z"));
+	assert.equal((await rpc("mac", { action: "before-edit", chatId: "chat_mac_fixture" })).synced, true);
+	assert.equal(read("mac").title, "Phone flush before Mac edit");
+	write(path.join(folder("mac"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Mac flush before phone edit", "2026-11-15T14:00:00Z"));
+	assert.equal((await rpc("phone", { action: "before-edit", chatId: "chat_mac_fixture" })).synced, true);
+	assert.equal(read("phone").title, "Mac flush before phone edit");
+	console.log("PASS both apps sync before editing, including Mac requesting a phone flush");
 	await stop("phone");
 	write(path.join(folder("mac"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "After restart"));
+	const offlineStart = Date.now();
+	assert.equal((await rpc("mac", { action: "before-edit", chatId: "chat_mac_fixture" })).offline, true);
+	assert(Date.now() - offlineStart < 6000);
 	await start("phone"); await settled();
 	assert.equal(JSON.parse(fs.readFileSync(path.join(folder("phone"), "chats/chat_mac_fixture.json"))).title, "After restart");
+	await stop("mac");
+	const phoneOfflineStart = Date.now();
+	assert.equal((await rpc("phone", { action: "before-edit", chatId: "chat_mac_fixture" })).offline, true);
+	assert(Date.now() - phoneOfflineStart < 6500);
 	assert.equal((await rpc("phone", { action: "disconnect" })).mode, "off");
-	console.log("PASS persisted pairing resumes after restart and disconnect preserves sessions");
+	console.log("PASS pairing resumes after restart, offline editing is bounded on both devices, and disconnect preserves sessions");
 } finally {
 	for (const name of [...processes.keys()]) await stop(name);
 	fs.rmSync(root, { recursive: true, force: true });

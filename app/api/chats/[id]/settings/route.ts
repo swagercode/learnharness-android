@@ -1,3 +1,4 @@
+import { prepareSessionEdit } from "@/src/server/session-sync";
 import {
 	clampChatLevel,
 	effectiveSettings,
@@ -26,6 +27,7 @@ import type { ChatSettings } from "@/src/core";
  */
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
+	await prepareSessionEdit(id);
 	if (!getChat(id)) return Response.json({ error: "Not found" }, { status: 404 });
 
 	const body = await req.json().catch(() => null);

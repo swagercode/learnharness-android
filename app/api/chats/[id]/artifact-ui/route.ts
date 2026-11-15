@@ -1,3 +1,4 @@
+import { prepareSessionEdit } from "@/src/server/session-sync";
 /**
  * THE ARTIFACT-UI ROUTE (owner, 2026-10-07): persists the learner's invert
  * switch onto a demo/figure steer message (details.ui.inverted) so it
@@ -14,6 +15,7 @@ import { getChat, stores } from "@/src/server";
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }): Promise<Response> {
 	const { id } = await ctx.params;
+	await prepareSessionEdit(id);
 	const chat = getChat(id);
 	if (!chat) return Response.json({ error: "Unknown chat" }, { status: 404 });
 

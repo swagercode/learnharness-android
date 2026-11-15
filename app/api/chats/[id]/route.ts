@@ -1,3 +1,4 @@
+import { prepareSessionEdit } from "@/src/server/session-sync";
 import { compactionInFlight, deleteChatSession, getChat, isTurnRunning, sessionCoverage, sessionCost, stores, turnFailure, type ChatDeleteMode } from "@/src/server";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -35,6 +36,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
  */
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
+	await prepareSessionEdit(id);
 	if (!getChat(id)) return Response.json({ error: "Not found" }, { status: 404 });
 	const body = (await req.json().catch(() => null)) as { title?: unknown } | null;
 	if (typeof body?.title !== "string" || body.title.trim() === "") {

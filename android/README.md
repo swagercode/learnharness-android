@@ -87,7 +87,7 @@ its sessions. Keep the Mac awake and its app running for sync to be available.
 Sync runs after completed session activity and retries every 30 seconds while
 the app runtime is alive. Android may stop the runtime when the app is closed;
 reopening resumes sync. The Mac can show the last successful connection in
-settings, and the phone shows offline errors, deferred work and conflicts.
+settings, and the phone shows offline errors, deferred work and first-sync status.
 
 Only sessions and their completed research/demo/visual/PDF job records sync.
 Per-session plans and model settings are inside the session record. Global
@@ -95,31 +95,41 @@ preferences, credentials, the knowledge graph and source files stay local.
 Deletion is local to each device; it never erases the other device's copy.
 Sessions over 32 MB are refused, and incompatible future schemas are not imported.
 
-Updates compare content hashes against the last common revision. In v18, if both
-copies changed offline, that session pauses until you choose its source:
+Updates compare content hashes against the last common revision. In v18, the
+first sync selects one source for sessions already on both devices. **Upload
+phone to Mac** is the default; **Use Mac versions** is also available. Sessions
+found only on one device are copied to the other. Existing v17 pairings show a
+one-time first-sync dialog. The choice is saved before any transfer and survives
+interruption; it cannot be switched once the first sync starts.
 
-- **Use Mac version** replaces the phone's copy with the Mac's version.
-- **Upload to Mac** replaces the Mac's copy with the phone's version.
-- **Later** leaves both versions untouched and keeps the conflict pending.
+Afterward, changed sessions sync automatically in both directions. If both
+copies changed, the newest saved session/artifact timestamp wins for that session
+only. Renames and model settings have a separate sync edit timestamp so they do
+not reorder the sidebar. Exact timestamp ties use the initial source preference.
+Keep the devices' automatic date/time enabled. Sessions are replaced as a whole;
+the app does not merge individual messages from simultaneous offline branches.
 
-The choice appears in a phone dialog and can be reopened from Settings → General
-→ Session sync. Other sessions continue syncing. An approved choice is persisted
-before transfer and retries safely after connection loss or restart. If either
-version changes, the stale choice is discarded and the app asks again. Replaced
-versions are kept privately in the receiving device's recovery history.
-Existing duplicate sessions created by v17 stay intact. V18 is compatible with
-the v17 Mac companion and its existing pairing code; the Mac need not be rebuilt.
-The importer checks that no local work or edits started during a download.
-A journal completes interrupted imports at startup. The previous three imported
-revisions of each session are retained privately under `data/sync-private/history`.
-Use the ordinary session backup export for an independent portable backup.
+Both apps check before opening/editing a session. The v18 Mac companion uses a
+private authenticated long-poll channel to ask a connected phone to flush its
+saved work. Offline editing is allowed: the pre-edit check waits at most five
+seconds for sync, then work can continue and synchronize when reachable. Active
+inference and unfinished artifacts defer imports. Simultaneous/offline edits can
+still diverge and use the per-session newest-version rule on reconnection.
+
+Update the Mac companion to v18 for the Mac pre-edit check. Its existing pairing
+code remains valid. Existing duplicate sessions created by v17 stay intact.
+The importer uses revision checks and a journal for interrupted imports. The
+previous three replaced revisions of each session are retained privately under
+`data/sync-private/history`. Use session backup export for a portable backup.
 
 Validation uses synthetic sessions and dummy pairing secrets. Run
-`NODE_ENV=test npx tsx --test tests/session-sync.test.ts` for transport, conflict,
-CAS, disconnect/reconnect and recovery checks. `scripts/mobile-sync-smoke.mjs`
-checks the pairing UI against an isolated local fixture server and blocks real
-sync/provider writes. `scripts/mobile-sync-conflict-smoke.mjs` verifies source
-choices, stale choices, offline retry, dismissal and mobile dialog bounds.
+`NODE_ENV=test npx tsx --test tests/session-sync.test.ts tests/session-sync-runtime.test.ts`
+for transport, first sync, newest-version selection, CAS, disconnect/reconnect,
+wakeup and recovery checks. `scripts/mobile-sync-initial-smoke.mjs` verifies the
+one-time dialog's source choice, retry, dismissal and mobile bounds against an
+isolated fixture server. `scripts/sync-runtime-smoke.mjs` verifies two production
+runtimes over private Tailscale HTTPS, including pre-edit checks in both directions
+and bounded offline editing.
 
 ## Astra Fast mode in v16
 

@@ -2,7 +2,7 @@ extends: ./electron-builder.yml
 directories:
   output: dist/sync-mac
 extraMetadata:
-  version: 0.4.1-sync.17
+  version: 0.4.1-sync.18
   learnHarnessSyncEdition: true
 mac:
   icon: build/icon.icns

@@ -32,6 +32,8 @@ export interface ChatRecord {
 	title: string;
 	createdAt: string;
 	updatedAt: string;
+	/** Sync edit time also covers renames/settings without reordering the sidebar. */
+	syncUpdatedAt?: string;
 	messages: LhMessage[];
 	/** The session's kind — absent = teach (pre-practice records). */
 	kind?: ChatKind;
