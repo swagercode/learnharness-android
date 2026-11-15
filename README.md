@@ -43,6 +43,15 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.15
+
+- Scopes full lesson planning and root audits to initial plans and substantive
+  revisions, so ordinary answer follow-ups can use the existing plan.
+- Directs the tutor to deliver the next sound teaching step and self-contained
+  question once ready, and to revisit settled work when new evidence warrants it.
+- Preserves model choice, reasoning effort, accuracy requirements, and automatic
+  answer continuation. These are prompt changes, not a measured latency guarantee.
+
 ## Version 0.4.1-android.14
 
 - Fixes greyed-out text, Markdown, and PDF files in Android's import picker.

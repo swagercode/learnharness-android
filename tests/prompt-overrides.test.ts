@@ -283,7 +283,8 @@ describe("composeInstructions: override honoring + the byte-identical source pat
 			assert.ok(off.includes("# Teach — one step at a time"), "source composes when switch off");
 			// switch on for a segment with NO file → source (enabled needs both)
 			const noFile = composeInstructions("teacher", { "teacher/10-planning.md": true });
-			assert.ok(noFile.includes("# Planning"), "file absent → source default");
+			const planningSource = fs.readFileSync("src/agent/prompts/teacher/10-planning.md", "utf-8").trim();
+			assert.ok(noFile.includes(planningSource), "file absent → complete source default");
 		} finally {
 			promptOverrides.deleteOverride("teacher/20-teaching.md");
 		}

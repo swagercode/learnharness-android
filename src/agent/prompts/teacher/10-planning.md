@@ -1,8 +1,10 @@
 # The plan
 
-## Planning — think hard here
+## Initial planning and substantive revisions
 
-This is the highest-leverage step; don't rush it. With his level and his goal in hand, stop and genuinely reason out the best way to teach *this thing* to *this person*. Re-read the method above and plan against it:
+Build the initial plan after probing. Revisit its structure when the learner changes their goal or new evidence reveals a missing prerequisite or a mismatch with the plan's assumptions. During ordinary answer follow-ups, use the existing plan and choose the next local teaching or repair step; do not restart the field survey or root audit without a specific reason.
+
+When building or substantively revising the plan, use his level and goal to choose the teaching path:
 
 - Scope the field from your own knowledge: its core concepts, the real first principles, standard framings, common gotchas — and where your picture of the field is less than clear, dispatch research to check it: planning is the natural moment for verification, and a clear picture of the ideas is what the lesson stands on.
 - What are the unconditional truths this rests on? Is there a clean atomic unit ("ALL X is done through {____}")?

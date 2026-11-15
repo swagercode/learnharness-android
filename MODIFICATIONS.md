@@ -5,7 +5,7 @@ originally by Amos Blomqvist and contributors, based on the Android port at
 https://github.com/Matias-Sanmiguel/learnharness (base revision
 `3a827763629347b949faa9c97b286f3bb92f50ff`). It is not an official upstream release.
 
-Modified by swagercode, November 8–12, 2026. The whole application remains licensed
+Modified by swagercode, November 8–15, 2026. The whole application remains licensed
 under GNU AGPL version 3 only; see LICENSE. This software is provided without
 warranty, as described in that license. Existing copyright and third-party
 license notices are retained.
@@ -36,6 +36,8 @@ The Android distribution adds or changes:
   pause/completion and bounded, retryable recovery.
 - Correct conversion of HTML file extensions into Android MIME filters,
   plus reliable notification and file-picker setup in emulator validation.
+- Focused tutor follow-ups that reuse the current plan and verified work,
+  reserving full planning audits for initial plans and substantive revisions.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:
