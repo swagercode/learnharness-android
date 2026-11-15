@@ -47,6 +47,29 @@ Install updates signed with the same key over the existing app to preserve data.
 Uninstalling or clearing app data removes local sessions and credentials. Backups
 are disabled so device-bound credentials are not copied to another device.
 
+## Astra Fast mode in v16
+
+In an existing ChatGPT Astra lesson, tap the thinking-level pill (for example,
+Low), then choose **Astra speed → Fast**. It requests faster processing while
+retaining the same model and reasoning level. The menu shows the higher-usage
+tradeoff before enabling it. Availability depends on the account/workspace;
+the request does not guarantee a particular response time.
+
+Fast starts off, is stored per session, applies from the next turn, and clears
+when switching models. Other sessions and background model slots are unaffected.
+Choose Standard to turn it off. A rejected tier is shown as an error with steps
+to return to Standard; the app never substitutes an API-key request.
+
+Version 16 uses version 14's teaching prompts and excludes version 15's prompt
+tuning. It installs over version 14 using the same application ID and signing key.
+
+The settings, transport and persistence tests use isolated fixtures. For browser
+geometry checks, seed a new directory with `scripts/mobile-layout-fixtures.mjs`,
+start a local server using its isolated data/auth paths, then run
+`LH_LAYOUT_FIXTURE=<fixture-directory> LH_LAYOUT_URL=http://localhost:<port> node scripts/mobile-astra-speed-smoke.mjs`.
+This checks phone/landscape menu bounds, touch targets, opt-in, reload, and return
+to Standard. Provider requests are blocked; this is not a live speed benchmark.
+
 ## File selection and validation in v14
 
 Android's document picker now accepts the text, Markdown, and PDF formats offered

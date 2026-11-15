@@ -43,6 +43,17 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.16
+
+- Adds an opt-in **Astra speed → Standard / Fast** choice inside the thinking
+  menu of an existing ChatGPT Astra session. Fast mode requests faster processing
+  with the same model and thinking effort, and may consume more plan allowance.
+- Speed is saved per session, starts off, and clears when switching models.
+  It applies from the next turn. Other sessions and background model slots keep
+  their own settings. Account/workspace eligibility still applies.
+- Restores version 14's teaching prompts; version 15's prompt tuning is excluded.
+  You can install this signed update directly over version 14.
+
 ## Version 0.4.1-android.15
 
 - Scopes full lesson planning and root audits to initial plans and substantive

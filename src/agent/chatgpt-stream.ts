@@ -6,9 +6,11 @@ import { chatGPTAbortController, chatGPTScope, chatGPTScopeCurrent, chatGPTLease
 import type { AdmissionScope, ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
 import { capturePreparedBackgroundPayload } from "./background-capture.ts";
 import { retryChatGPTRequest } from "./chatgpt-retry.ts";
+import { supportsAstraFastMode } from "../core/fast-mode.ts";
 
 const USAGE = "https://chatgpt.com/settings/usage";
-export function chatGPTStreamError(message: string): string {
+export function chatGPTStreamError(message: string, fastMode = false): string {
+	if (fastMode && /service[_ -]tier/i.test(message)) return "ChatGPT could not use Fast mode for this request. Choose Standard under Thinking → Astra speed, then retry. Your session is preserved; no API-key fallback was used.";
 	if (/usage_limit|quota/.test(message)) return `ChatGPT plan usage limit reached. Manage usage at ${USAGE}. No API-key fallback was used.`;
 	if (/slow_down|rate_limit|429/.test(message)) return "ChatGPT is temporarily limiting requests. Automatic retries could not complete this request. Try again later.";
 	if (/subscription_sharing_(usage|user)_unavailable|server_is_overloaded|50[0234]/.test(message)) return "ChatGPT is temporarily unavailable. Automatic retries could not complete this request. Try again later.";
@@ -23,9 +25,12 @@ export function chatGPTStreamError(message: string): string {
 }
 
 /** Restrict the body at the final payload seam, even if caller samplingParams add fields. */
-export function chatGPTPayload(raw: unknown, selectedModelId: string): Record<string, unknown> {
+export function chatGPTPayload(raw: unknown, selectedModelId: string, fastMode = false): Record<string, unknown> {
 	const payload = raw as Record<string, unknown>;
 	const out: Record<string, unknown> = { model: selectedModelId, store: false, stream: true };
+	// The saved opt-in owns this field; caller payload hooks cannot enable
+	// a higher-usage tier or silently downgrade an explicit Fast request.
+	if (fastMode && supportsAstraFastMode({ provider: "chatgpt", id: selectedModelId })) out.service_tier = "fast";
 	for (const key of ["instructions", "reasoning", "include", "text", "tool_choice", "parallel_tool_calls", "prompt_cache_key"]) {
 		if (payload[key] !== undefined) out[key] = payload[key];
 	}
@@ -48,8 +53,9 @@ export function chatGPTHistory(context: TranscriptContext, logicalModel: Model<A
 function empty(model: Model<Api>): AssistantMessage {
 	return { role: "assistant", api: model.api, provider: "chatgpt", model: model.id, content: [], stopReason: "error", timestamp: Date.now(), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 }
-export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDispatchLifecycle): StreamFunction<Api, SimpleStreamOptions> {
+export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDispatchLifecycle, fastMode = false): StreamFunction<Api, SimpleStreamOptions> {
 	return (logicalModel, context, options) => {
+		const useFastMode = fastMode && supportsAstraFastMode(logicalModel);
 		const output = new AssistantMessageEventStream();
 		const purpose = background();
 		const { controller, release } = chatGPTAbortController(purpose);
@@ -98,7 +104,7 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 					},
 					onPayload: async (raw, model) => {
 						const replacement = await options?.onPayload?.(raw, model);
-						const payload = chatGPTPayload(replacement === undefined ? raw : replacement, logicalModel.id);
+						const payload = chatGPTPayload(replacement === undefined ? raw : replacement, logicalModel.id, useFastMode);
 						check();
 						capturePreparedBackgroundPayload(payload, logicalModel);
 						return payload;
@@ -125,7 +131,7 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 			} catch (err) {
 				if (terminal) return;
 				if (!committed) lifecycle?.noDispatch(await chatGPTDenial(scope, controller, options?.signal?.aborted === true, purpose));
-				partial = { ...partial, stopReason: signal.aborted ? "aborted" : "error", errorMessage: chatGPTStreamError(err instanceof Error ? err.message : "") };
+				partial = { ...partial, stopReason: signal.aborted ? "aborted" : "error", errorMessage: chatGPTStreamError(err instanceof Error ? err.message : "", useFastMode) };
 				output.push({ type: "error", reason: partial.stopReason as "error" | "aborted", error: partial });
 			} finally { release(); output.end(); }
 		})();

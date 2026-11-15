@@ -25,6 +25,7 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ModelRole } from "../../config.ts";
 import type { ChatSettings } from "./contracts/chat.ts";
+import { supportsAstraFastMode } from "./fast-mode.ts";
 import type { SearchEngineId } from "./search.ts";
 import {
 	BACKGROUND_MODEL_ROLES,
@@ -62,6 +63,7 @@ export interface EffectiveSlot {
  *  as EffectiveSlot; undefined means the role's whole chain came up
  *  empty and whatever needs it refuses honestly. */
 export interface EffectiveModelSpec {
+	fastMode?: boolean;
 	provider: string;
 	id: string;
 	thinkingLevel?: ThinkingLevel;
@@ -118,6 +120,7 @@ export function resolveConversationSpec(
 		provider: model.provider,
 		id: model.id,
 		thinkingLevel: chat?.thinkingLevel ?? strong?.thinkingLevel,
+		...(chat?.fastMode !== undefined ? { fastMode: chat.fastMode === true && supportsAstraFastMode(model) } : {}),
 	};
 }
 

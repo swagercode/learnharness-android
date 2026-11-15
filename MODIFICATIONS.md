@@ -36,8 +36,9 @@ The Android distribution adds or changes:
   pause/completion and bounded, retryable recovery.
 - Correct conversion of HTML file extensions into Android MIME filters,
   plus reliable notification and file-picker setup in emulator validation.
-- Focused tutor follow-ups that reuse the current plan and verified work,
-  reserving full planning audits for initial plans and substantive revisions.
+- Optional faster processing for ChatGPT Astra, with a per-session opt-in,
+  visible usage guidance, and unchanged model and thinking effort. Version 16
+  restores the teaching prompts shipped in version 14.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:

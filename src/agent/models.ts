@@ -112,6 +112,7 @@ export function openRouterApiKey(): string | undefined {
  *  the baked default resolves here (owner 2026-09-22) — the first entry
  *  of DEFAULT_THINKING_ORDER the model supports. */
 export interface ResolvedModelSpec {
+	fastMode?: boolean;
 	provider: string;
 	id: string;
 	thinkingLevel?: ThinkingLevel;
@@ -183,7 +184,7 @@ export function piEngineForSpec(spec: ResolvedModelSpec, background: boolean | (
 				return current.streamSimple(permitImages(currentModel), context, { ...requestOptions, reasoning: currentLevel === "off" ? undefined : currentLevel });
 			}
 			const purpose = typeof background === "function" ? background : () => background;
-			const stream = spec.provider === "chatgpt" ? chatGPTStream(purpose, lifecycle) : nativeId ? nativeSubscriptionStream(models.getProvider(nativeId)!, purpose, lifecycle) : models.streamSimple.bind(models);
+			const stream = spec.provider === "chatgpt" ? chatGPTStream(purpose, lifecycle, spec.fastMode === true) : nativeId ? nativeSubscriptionStream(models.getProvider(nativeId)!, purpose, lifecycle) : models.streamSimple.bind(models);
 			// Cursor starts its loopback bridge before the native completions stream.
 			return (spec.provider === CURSOR_PROVIDER_ID ? cursorStream(stream) : stream)(requestModel, context, requestOptions);
 		},

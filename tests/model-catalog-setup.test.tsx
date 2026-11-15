@@ -11,7 +11,7 @@ import { useModelCatalog } from "../components/model-catalog.ts";
 import { notifySettingsSaved } from "../components/settings-signal.ts";
 import { useModelSetup, savedSlotsConfigured, selectedModelUnavailable, openModelPicker } from "../components/setup-cta.tsx";
 import { StatsBar } from "../components/stats-bar.tsx";
-import type { ModelCatalogEntry, ModelCatalogResponse, ModelsSettings } from "../src/core/index.ts";
+import type { ChatSettings, ModelCatalogEntry, ModelCatalogResponse, ModelsSettings } from "../src/core/index.ts";
 
 const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, {
@@ -364,4 +364,48 @@ test("OpenCode's saved shared credential names both Pi providers without changin
 	assert.equal(providerKeyLabel("OPENCODE_API_KEY", [...providers].reverse()), "OpenCode (Zen / Go)");
 	assert.equal(providerKeyLabel("FIXTURE_KEY", [provider]), "Fixture");
 	assert.equal(classifyKeys([{ id: "OPENCODE_API_KEY", info: null, present: true, masked: "…fake", source: "file", shadowedByEnv: false }], providers).addable.length, 0);
+});
+
+for (const rejected of [false, true]) test(`Astra speed is explicit and session-scoped; save rejected=${rejected}`, async () => {
+	installFetch();
+	const astra: ModelCatalogEntry = { ...a, provider: "chatgpt", id: "gpt-6-astra", name: "Astra", supportedLevels: ["low", "medium", "high", "xhigh", "max"] };
+	const body = catalog(); body.models = [astra, b];
+	let session: ChatSettings = { model: { provider: astra.provider, id: astra.id }, thinkingLevel: "low" };
+	const sessionWrites: ChatSettings[] = []; const requestsOnly = globalThis.fetch;
+	globalThis.fetch = async (input, init) => {
+		if (input === "/api/settings") return Response.json({ settings: { models: { strong: body.slots.strong } } });
+		if (input === "/api/chats/fixture") return Response.json({ settings: session });
+		if (input === "/api/chats/fixture/settings") {
+			const next = JSON.parse(String(init?.body)); sessionWrites.push(next);
+			if (rejected) return Response.json({ error: "Save unavailable" }, { status: 400 });
+			session = next; return Response.json({ settings: session });
+		}
+		return requestsOnly(input, init);
+	};
+	await warm(body); await render(<StatsBar turns={[]} chatId="fixture" />);
+	await click("stats-thinking");
+	assert.equal(element("astra-speed-standard").getAttribute("aria-pressed"), "true");
+	assert.match(element("astra-speed-options").textContent!, /may use more/);
+	await click("astra-speed-fast");
+	assert.deepEqual(sessionWrites[0], { model: { provider: astra.provider, id: astra.id }, thinkingLevel: "low", fastMode: true });
+	if (rejected) {
+		assert.match(element("thinking-menu").textContent!, /Save unavailable/);
+		assert.match(element("stats-thinking").getAttribute("aria-label")!, /Standard/);
+		assert.equal(session.fastMode, undefined);
+		return;
+	}
+	assert.match(element("stats-thinking").getAttribute("aria-label")!, /Fast/);
+	await click("stats-thinking"); await click("thinking-option-high");
+	assert.equal(session.fastMode, true); assert.equal(session.thinkingLevel, "high");
+	// A remount reads persisted session truth rather than inheriting a global speed.
+	await render(<div />); await render(<StatsBar turns={[]} chatId="fixture" />);
+	assert.match(element("stats-thinking").getAttribute("aria-label")!, /Fast/);
+	await click("stats-thinking"); await click("astra-speed-standard");
+	assert.equal(session.fastMode, false); assert.equal(session.thinkingLevel, "high");
+	await click("stats-thinking"); await click("astra-speed-fast");
+	await click("stats-model"); await click("model-option-claude-opus-5-5");
+	assert.equal(session.model?.id, b.id); assert.equal(session.fastMode, undefined);
+	await click("stats-thinking");
+	assert.equal(document.querySelector('[data-testid="astra-speed-options"]'), null);
+	assert.equal(writes.length, 0, "No global model settings changed");
 });

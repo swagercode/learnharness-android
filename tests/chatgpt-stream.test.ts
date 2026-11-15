@@ -20,21 +20,22 @@ let requests: { authorization: string | null; body: Record<string, any>; url: st
 let responseEvents: unknown[] = [];
 const ipc = (value: unknown) => (process.emit as (name: string, value: unknown) => boolean)("message", value);
 const model = piModels().getModel("openai", "gpt-5") as Model<"openai-responses">;
+const astra = piModels().getModel("openai", "gpt-6-astra") as Model<"openai-responses">;
 const status = { available: true, pending: false, allowBackgroundUse: false, activeId: "scratch-account", accounts: [{ id: "scratch-account", email: "dummy@example.invalid", registration: "oaiapp_scratch", connected: true, planEnabled: true, background: false }], error: null };
 before(async () => {
 	process.env.LH_DESKTOP_SERVER = "1"; process.env.LH_DESKTOP_API_SECRET = "d".repeat(64);
-	assert(model);
+	assert(model); assert(astra);
 	process.env.OPENAI_API_KEY = "sk-scratch-must-never-be-used";
 	Object.defineProperty(process, "connected", { configurable: true, value: true });
 	Object.defineProperty(process, "send", { configurable: true, value: (message: any, callback?: () => void) => {
 		queueMicrotask(() => {
 			ipc({ channel: "lh:chatgpt", id: message.id, op: message.op,
-				...(message.op === "lease" && leaseError ? { ok: false, error: leaseError, stamp: { epoch: 1, authorityRevision: 1, revision: 1 } } : { ok: true, value: message.op === "lease" ? { accessToken: "scratch-oauth-only", accountId: "scratch-account", epoch: 1, authorityRevision: 1, revision: 1 } : { epoch: 1, authorityRevision: 1, revision: 1, status, accountId: "scratch-account", models: [{ id: model.id, name: "Scratch account model" }, { id: "unknown-capabilities", name: "Do not invent capabilities" }] } }),
+				...(message.op === "lease" && leaseError ? { ok: false, error: leaseError, stamp: { epoch: 1, authorityRevision: 1, revision: 1 } } : { ok: true, value: message.op === "lease" ? { accessToken: "scratch-oauth-only", accountId: "scratch-account", epoch: 1, authorityRevision: 1, revision: 1 } : { epoch: 1, authorityRevision: 1, revision: 1, status, accountId: "scratch-account", models: [{ id: model.id, name: "Scratch account model" }, { id: astra.id, name: "Astra fixture" }, { id: "unknown-capabilities", name: "Do not invent capabilities" }] } }),
 			});
 		});
 		callback?.(); return true;
 	} });
-	await refreshChatGPTModels([model]);
+	await refreshChatGPTModels([model, astra]);
 	globalThis.fetch = async (input, init) => {
 		const req = new Request(input, init);
 		requests.push({ authorization: req.headers.get("authorization"), body: JSON.parse(await req.text()), url: req.url });
@@ -54,7 +55,7 @@ const complete = (output: unknown[] = []) => ({ type: "response.completed", resp
 const context = () => normalizeContext({ systemPrompt: "Scratch teacher instructions", messages: [{ role: "user", content: [{ type: "text", text: "Scratch learning material" }, { type: "image", data: "c2NyYXRjaA==", mimeType: "image/png" }], timestamp: 1 }], tools: [{ name: "scratch_tool", description: "Scratch local tool", parameters: Type.Object({ value: Type.String() }) }] });
 
 test("catalog intersects supported capabilities, without inventing model limits", () => {
-	assert.equal(chatGPTModels().length, 1);
+	assert.equal(chatGPTModels().length, 2);
 	assert.equal(chatGPTModels()[0]!.provider, "chatgpt");
 	assert.equal(chatGPTModels()[0]!.contextWindow, model.contextWindow);
 	assert.deepEqual(chatGPTModels()[0]!.input, model.input);
@@ -100,6 +101,39 @@ test("mixed history never blanket-relabels API providers or reuses foreign reaso
 	assert.deepEqual((transformed.messages[0] as AssistantMessage).content, []);
 	assert.equal((transformed.messages[1] as AssistantMessage).content[0]!.type, "thinking");
 	assert.equal(native.content.length, 1, "source history must not be mutated");
+});
+
+test("Astra Fast opt-in reaches the final OAuth request and preserves Low effort across calls", async () => {
+	for (const fastMode of [undefined, false, true]) {
+		requests = []; responseEvents = [complete()];
+		const engine = piEngineForSpec({ provider: "chatgpt", id: astra.id, thinkingLevel: "low", fastMode }, false);
+		for (let step = 0; step < 2; step++) {
+			const result = await engine.streamFn(engine.model, context(), {
+				onPayload: raw => ({ ...raw as object, service_tier: "ultrafast" }),
+			}).result();
+			assert.equal(result.stopReason, "stop");
+		}
+		assert.equal(requests.length, 2);
+		for (const request of requests) {
+			assert.equal(request.body.model, astra.id);
+			assert.equal(request.body.reasoning.effort, "low");
+			assert.equal(request.body.service_tier, fastMode ? "fast" : undefined);
+			assert.equal(request.authorization, "Bearer scratch-oauth-only");
+		}
+	}
+	assert.equal(chatGPTPayload({ input: [], service_tier: "fast" }, model.id, true).service_tier, undefined);
+});
+
+test("Fast tier refusal explains how to return to Standard without silently changing tier or credentials", async () => {
+	requests = [];
+	responseEvents = [{ type: "error", code: "service_tier_access_denied", message: "private account detail" }];
+	const engine = piEngineForSpec({ provider: "chatgpt", id: astra.id, thinkingLevel: "low", fastMode: true }, false);
+	const result = await engine.streamFn(engine.model, context()).result();
+	assert.equal(result.stopReason, "error");
+	assert.match(result.errorMessage!, /Choose Standard/);
+	assert(!result.errorMessage!.includes("private account detail"));
+	assert.equal(requests.length, 1);
+	assert.equal(requests[0]!.body.service_tier, "fast");
 });
 
 test("no terminal completed is never success; late quota/incomplete streams are actionable/redacted", async () => {

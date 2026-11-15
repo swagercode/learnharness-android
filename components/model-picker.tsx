@@ -12,6 +12,8 @@ import { notifySettingsSaved, useSettingsSaved } from "@/components/settings-sig
 import { useModelCatalog } from "@/components/model-catalog";
 export { useModelCatalog } from "@/components/model-catalog";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
+import { supportsAstraFastMode } from "@/src/core/fast-mode";
+import { ZapIcon } from "lucide-react";
 
 /** provider:id → known contextWindow over the cached catalog, mirroring
  * the server's catalogContextLimits join. CLI aliases have no global
@@ -45,6 +47,8 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 	const [session, setSession] = useState<{ settings?: ChatSettings }>();
 	const [open, setOpen] = useState<"model" | "thinking" | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [savingSession, setSavingSession] = useState(false);
+	const sessionWritePending = useRef(false);
 	const containerRef = useRef<HTMLDivElement>(null);
 
 	// The record read — BOTH mount and the cross-surface signal land
@@ -92,10 +96,13 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 		? session ? {
 				model: session.settings?.model ?? strong?.model,
 				thinkingLevel: session.settings?.thinkingLevel ?? strong?.thinkingLevel,
+				fastMode: session.settings?.fastMode,
 			} : undefined
 		: strong;
 	const effectiveId = override?.model?.id;
 	const effectiveProvider = override?.model?.provider;
+	const offersFastMode = !!chatId && supportsAstraFastMode(override?.model);
+	const fastMode = offersFastMode && override?.fastMode === true;
 	useEffect(() => {
 		onModelChange?.(effectiveProvider && effectiveId ? `${effectiveProvider}:${effectiveId}` : undefined);
 	}, [effectiveProvider, effectiveId, onModelChange]);
@@ -183,6 +190,9 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 	// one session's record, not the slots — no other surface reads it.
 	const saveChat = useCallback(
 		async (next: ChatSettings) => {
+			if (sessionWritePending.current) return;
+			sessionWritePending.current = true;
+			setSavingSession(true);
 			setError(null);
 			try {
 				const res = await fetch(`/api/chats/${chatId}/settings`, {
@@ -200,6 +210,9 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 				setOpen(null);
 			} catch {
 				setError("Could not reach the server — try again.");
+			} finally {
+				sessionWritePending.current = false;
+				setSavingSession(false);
 			}
 		},
 		[chatId],
@@ -212,13 +225,16 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 	const apply = useCallback(
 		(provider: string, id: string, level: ThinkingLevel | undefined) => {
 			if (chatId) {
-				void saveChat({ model: { provider, id }, thinkingLevel: level });
+				const sameModel = provider === effectiveProvider && id === effectiveId;
+				void saveChat({ model: { provider, id }, thinkingLevel: level,
+					...(sameModel && override?.fastMode !== undefined ? { fastMode: override.fastMode } : {}),
+				});
 			} else {
 				// composeSlotModel's empty-string convention: no level = unset.
 				void save(composeSlotModel(models, "strong", provider, id, level ?? ""));
 			}
 		},
-		[chatId, models, save, saveChat],
+		[chatId, models, save, saveChat, effectiveProvider, effectiveId, override?.fastMode],
 	);
 
 	// Shortcut seams (keyboard wave A): ⌘K opens the model menu (the
@@ -282,6 +298,7 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 				<button
 				type="button"
 				data-testid="stats-model"
+				disabled={savingSession}
 				onClick={() => openMenu("model")}
 				aria-expanded={open === "model"}
 				// Chrome look (owner, fix wave round 3): matches the graph
@@ -298,13 +315,15 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 				// "Thinking" + its real shortcut via the registry (owner interlude
 				// 2026-09-25): ⇧⇥ cycles the level, so "Thinking (⇧⇥)" —
 				// rebind-live like every Hint suffix.
-				label="Thinking"
+				label={offersFastMode ? "Thinking and Astra speed" : "Thinking"}
 				action="cycle-thinking"
 				side="bottom"
 			>
 				<button
 				type="button"
 				data-testid="stats-thinking"
+				disabled={savingSession}
+				aria-label={offersFastMode ? `Thinking: ${effectiveLevel ?? "unset"}. Astra speed: ${fastMode ? "Fast" : "Standard"}` : undefined}
 				onClick={() => {
 					// No model picked → nothing to set a level FOR: the click
 					// is a no-op, never an empty menu.
@@ -323,6 +342,7 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 				<span className="text-card-foreground">
 					{effectiveLevel === undefined ? "—" : (THINKING_LABEL[effectiveLevel] ?? effectiveLevel)}
 				</span>
+				{fastMode && <ZapIcon aria-hidden="true" className="size-3 shrink-0 text-amber-400" />}
 				<span aria-hidden className="text-xs text-muted-foreground">▾</span>
 			</button>
 			</Hint>
@@ -359,15 +379,31 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 					anchorRef={containerRef}
 					testid="thinking-menu"
 					preferredSide="up"
-					menuClass="flex w-44 flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl"
+					menuClass={`flex ${offersFastMode ? "w-60" : "w-44"} flex-col gap-0.5 rounded-xl border bg-card p-2 text-xs shadow-xl`}
 				>
-					<ThinkingMenuList
-						levels={catalog ? levels : []}
-						effectiveLevel={effectiveLevel}
-						onPick={(level) => apply(effectiveProvider ?? "", effectiveId ?? "", level as ThinkingLevel)}
-						empty={catalog ? (effectiveId ? `${prettyModel(effectiveId)} has no thinking levels.` : "Pick a model first.") : "Loading…"}
-						footer="Levels this model actually supports"
-					/>
+					<fieldset disabled={savingSession} aria-busy={savingSession} className="flex min-w-0 flex-col gap-0.5">
+						<ThinkingMenuList
+							levels={catalog ? levels : []}
+							effectiveLevel={effectiveLevel}
+							onPick={(level) => apply(effectiveProvider ?? "", effectiveId ?? "", level as ThinkingLevel)}
+							empty={catalog ? (effectiveId ? `${prettyModel(effectiveId)} has no thinking levels.` : "Pick a model first.") : "Loading…"}
+							footer="Levels this model actually supports"
+						/>
+						{offersFastMode && <div className="mt-2 border-t pt-2" data-testid="astra-speed-options">
+							<p className="px-2 pb-1 font-medium">Astra speed</p>
+							{[false, true].map((enabled) => <button
+								key={String(enabled)} type="button"
+								data-testid={enabled ? "astra-speed-fast" : "astra-speed-standard"}
+								aria-pressed={fastMode === enabled}
+								className={`flex min-h-11 w-full items-center justify-between rounded-lg px-2 py-2 text-left hover:bg-muted ${fastMode === enabled ? "bg-muted/60" : ""}`}
+								onClick={() => void saveChat({ model: { provider: effectiveProvider!, id: effectiveId! }, thinkingLevel: effectiveLevel, fastMode: enabled })}
+							>
+								<span>{enabled ? "Fast · higher usage" : "Standard"}</span>
+								{fastMode === enabled && <span aria-hidden="true">✓</span>}
+							</button>)}
+							<p className="px-2 pt-2 leading-relaxed text-muted-foreground">Same model and thinking level. Fast may use more of your ChatGPT plan; availability depends on your account. Saved for this session and applied from your next turn.</p>
+						</div>}
+					</fieldset>
 					{error && <div className="mt-1 text-destructive">{error}</div>}
 				</MenuShell>
 			)}
