@@ -122,7 +122,7 @@ async function configure(input: unknown) {
 	if (body?.action === "disconnect") config = { mode: "off" };
 	else if (body?.action === "host") {
 		if (process.env.LH_ANDROID === "1") throw new SyncError(400, "Set up the sync host on your Mac.");
-		config = { mode: "host", ...validateConnection({ url: `http://${body.address}:47823`, token: randomBytes(32).toString("hex"), hostId: randomUUID() }) };
+		config = { mode: "host", ...validateConnection({ url: `https://${body.address?.trim()}:47823`, token: randomBytes(32).toString("hex"), hostId: randomUUID() }) };
 	} else if (body?.action === "connect" && typeof body.code === "string") {
 		const connection = decodePairing(body.code.trim());
 		await remoteSessions(connection, AbortSignal.timeout(15_000)).manifest();

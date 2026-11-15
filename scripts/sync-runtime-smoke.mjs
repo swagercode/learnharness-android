@@ -1,4 +1,4 @@
-/** Integration test using a temporary tailnet forward on TCP 47825 and two
+/** Integration test using a temporary tailnet HTTPS forward on port 47825 and two
  * isolated production app runtimes. No real sessions or provider credentials. */
 import fs from "node:fs";
 import os from "node:os";
@@ -7,10 +7,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 
-const ip = process.env.LH_SYNC_TEST_IP;
-if (!ip || !/^100\.(?:[6-9]\d|1[01]\d|12[0-7])\.\d+\.\d+$/.test(ip)) throw Error("Set LH_SYNC_TEST_IP to this Mac's Tailscale IP; forward TCP 47825 to localhost:47825 first.");
+const hostname = process.env.LH_SYNC_TEST_HOST;
+if (!hostname || !/^[a-z0-9-]+\.[a-z0-9-]+\.ts\.net$/.test(hostname)) throw Error("Set LH_SYNC_TEST_HOST to this Mac's Tailscale hostname; forward HTTPS 47825 to http://localhost:47825 first.");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "lh-sync-production-"));
-const connection = { url: `http://${ip}:47825`, token: randomBytes(32).toString("hex"), hostId: randomUUID() };
+const connection = { url: `https://${hostname}:47825`, token: randomBytes(32).toString("hex"), hostId: randomUUID() };
 const processes = new Map();
 const pause = ms => new Promise(done => setTimeout(done, ms));
 const folder = name => path.join(root, name, "data");
@@ -48,7 +48,7 @@ try {
 	const code = "lh-sync-1:" + Buffer.from(JSON.stringify(connection)).toString("base64url");
 	await rpc("phone", { action: "connect", code }); await settled();
 	for (const device of ["phone", "mac"]) for (const id of ["chat_mac_fixture", "chat_phone_fixture"]) assert(fs.existsSync(path.join(folder(device), `chats/${id}.json`)));
-	console.log("PASS production apps synchronize both ways through Tailscale TCP forwarding");
+	console.log("PASS production apps synchronize both ways through private Tailscale HTTPS");
 	write(path.join(folder("mac"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Mac offline change"));
 	write(path.join(folder("phone"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Phone offline change"));
 	await rpc("phone", { action: "now" }); const status = await settled(); assert.equal(status.conflicts, 1);

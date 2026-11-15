@@ -13,7 +13,7 @@ process.env.LH_DATA_DIR = root;
 const originalFetch = globalThis.fetch;
 const { configureSync, syncStatus, runSessionSync } = await import("../src/server/session-sync.ts");
 const { chatStore } = await import("../src/store/chats.ts");
-const connection = { url: "http://100.100.100.100:47823", token: "b".repeat(64), hostId: randomUUID() };
+const connection = { url: "https://mac.tailnet-test.ts.net:47823", token: "b".repeat(64), hostId: randomUUID() };
 const item: SessionPackage = { version: 1, chat: { id: "chat_remote", title: "Remote", createdAt: "2026-01-01", updatedAt: "2026-01-01", messages: [] }, jobs: [] };
 after(async () => {
 	await configureSync({ action: "disconnect" });

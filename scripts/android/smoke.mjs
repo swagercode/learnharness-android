@@ -21,9 +21,20 @@ async function tapDocumentUi(attribute, value) {
 			xml = adb("shell", "cat", "/sdcard/lh-picker.xml");
 			await fs.writeFile(path.join(artifacts, "picker.xml"), xml);
 		} catch { await pause(500); continue; }
-		const node = [...xml.matchAll(/<node\b[^>]*>/g)].map((match) => match[0]).find((node) => node.includes(`${attribute}="${value}"`) && !node.includes('enabled="false"'));
+		const nodes = [...xml.matchAll(/<node\b[^>]*>/g)].map((match) => match[0]);
+		// On loaded CI runners the unrelated Pixel Launcher can ANR after
+		// rotation and cover DocumentsUI. Close that launcher only; an app
+		// or picker ANR must still fail this test.
+		const launcherANR = nodes.some(node => node.includes('text="Pixel Launcher isn\'t responding"'));
+		const node = launcherANR
+			? nodes.find(node => node.includes('resource-id="android:id/aerr_close"'))
+			: nodes.find(node => node.includes(`${attribute}="${value}"`) && !node.includes('enabled="false"'));
 		const bounds = node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
-		if (bounds) { adb("shell", "input", "tap", String(Math.floor((+bounds[1] + +bounds[3]) / 2)), String(Math.floor((+bounds[2] + +bounds[4]) / 2))); return; }
+		if (bounds) {
+			adb("shell", "input", "tap", String(Math.floor((+bounds[1] + +bounds[3]) / 2)), String(Math.floor((+bounds[2] + +bounds[4]) / 2)));
+			if (launcherANR) { await pause(500); continue; }
+			return;
+		}
 		await pause(500);
 	}
 	throw new Error(`Android file picker control unavailable: ${value}`);

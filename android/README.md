@@ -52,8 +52,8 @@ are disabled so device-bound credentials are not copied to another device.
 This release adds two-way session sync to the Android app and a matching Mac
 companion. Tailscale supplies an encrypted private connection; there is no
 public sync server or Tailscale Funnel. The companion serves only a bounded,
-paired session protocol on loopback TCP 47823. Tailscale Serve forwards the
-same private tailnet port to it. Other Tailscale services remain unchanged.
+paired session protocol on loopback TCP 47823. Tailscale Serve terminates verified HTTPS on the
+same private tailnet port and forwards to it. Pairing rejects plaintext HTTP. Other Tailscale services remain unchanged.
 
 Build the Mac companion after `npm run build` and `node scripts/build-server.mjs`:
 
@@ -69,8 +69,10 @@ It uses the existing `~/Library/Application Support/LearnHarness` data directory
 Its upstream auto-updater is disabled so an upstream release cannot remove sync.
 Use the matching companion when updating this fork.
 
-The setup script requires Tailscale to be connected on the Mac. It configures
-only TCP port 47823 and saves the pairing secret with owner-only file permissions
+The setup script requires Tailscale to be connected on the Mac, with MagicDNS
+and HTTPS certificates enabled. If Tailscale asks you to enable Serve, enable
+HTTPS and leave optional Funnel unchecked. It configures
+only private HTTPS port 47823 and saves the pairing secret with owner-only file permissions
 under `data/sync-private`. It never prints the secret, alters session records,
 or replaces existing services on other ports. `LH_SYNC_DATA_DIR` and
 `LH_TAILSCALE_BIN` override its data directory and Tailscale executable.

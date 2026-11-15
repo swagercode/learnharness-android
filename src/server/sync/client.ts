@@ -1,4 +1,7 @@
 import { CHAT_ID, MAX_PACKAGE, SyncError, conflictCopy, packageHash, validatePackage, type Revision, type SessionPackage, type SessionRecords } from "../../store/session-sync.ts";
+import { Resolver } from "node:dns/promises";
+import { request as httpsRequest } from "node:https";
+import { Readable } from "node:stream";
 
 export interface SyncConnection { url: string; token: string; hostId: string }
 export interface SyncState {
@@ -12,8 +15,9 @@ export function validateConnection(value: unknown): SyncConnection {
 	if (!v || typeof v.url !== "string" || !/^[a-f0-9]{64}$/.test(v.token) || !/^[a-f0-9-]{36}$/.test(v.hostId)) throw new SyncError(400, "Invalid pairing code.");
 	let url: URL;
 	try { url = new URL(v.url); } catch { throw new SyncError(400, "Invalid sync address."); }
-	const ip = url.hostname.split(".").map(Number);
-	if (url.protocol !== "http:" || ip.length !== 4 || ip[0] !== 100 || ip[1]! < 64 || ip[1]! > 127 || ip.some(n => !Number.isInteger(n) || n < 0 || n > 255) || url.username || url.password || url.search || url.hash || url.pathname !== "/" || Number(url.port) < 1024 || Number(url.port) > 65535) throw new SyncError(400, "Use the Mac's private Tailscale pairing code.");
+	// Require a verified TLS identity even when the device's VPN is disconnected.
+	const tailnetHost = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.ts\.net$/;
+	if (url.protocol !== "https:" || !tailnetHost.test(url.hostname) || url.username || url.password || url.search || url.hash || url.pathname !== "/" || Number(url.port) < 1024 || Number(url.port) > 65535) throw new SyncError(400, "Use the Mac's private HTTPS Tailscale pairing code.");
 	return { url: url.origin, token: v.token, hostId: v.hostId };
 }
 export function decodePairing(code: string): SyncConnection {
@@ -22,6 +26,41 @@ export function decodePairing(code: string): SyncConnection {
 	catch (e) { if (e instanceof SyncError) throw e; throw new SyncError(400, "Invalid pairing code."); }
 }
 export function encodePairing(connection: SyncConnection) { return `lh-sync-1:${Buffer.from(JSON.stringify(validateConnection(connection))).toString("base64url")}`; }
+export function isTailnetIPv4(address: string) {
+	const ip = address.split(".").map(Number);
+	return ip.length === 4 && ip[0] === 100 && ip[1]! >= 64 && ip[1]! <= 127 && ip.every(n => Number.isInteger(n) && n >= 0 && n <= 255);
+}
+async function syncFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+	try { return await fetch(input, init); }
+	catch (error) {
+		const code = (error as { cause?: { code?: string } }).cause?.code;
+		if (!["ENOTFOUND", "EAI_AGAIN"].includes(code ?? "") || typeof input !== "string") throw error;
+		const url = new URL(input);
+		if (url.protocol !== "https:" || !url.hostname.endsWith(".ts.net")) throw error;
+		// Some embedded runtimes or managed system resolvers cannot resolve
+		// MagicDNS. Ask Tailscale directly, while retaining TLS hostname checks.
+		const resolver = new Resolver({ timeout: 3000, tries: 2 });
+		resolver.setServers(["100.100.100.100"]);
+		const addresses = await resolver.resolve4(url.hostname);
+		init?.signal?.throwIfAborted();
+		if (!addresses.length || addresses.some(address => !isTailnetIPv4(address))) throw error;
+		return new Promise((resolve, reject) => {
+			const req = httpsRequest(url, {
+				method: init?.method, headers: Object.fromEntries(new Headers(init?.headers)), signal: init?.signal ?? undefined,
+				lookup: (_hostname, options, callback) => {
+					if (options.all) callback(null, addresses.map(address => ({ address, family: 4 })));
+					else callback(null, addresses[0]!, 4);
+				},
+			}, response => {
+				const headers = new Headers();
+				for (let i = 0; i < response.rawHeaders.length; i += 2) headers.append(response.rawHeaders[i]!, response.rawHeaders[i + 1]!);
+				resolve(new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, { status: response.statusCode, headers }));
+			});
+			req.on("error", reject);
+			req.end(init?.body);
+		});
+	}
+}
 export async function boundedJSON(response: Response) {
 	if (!response.body) throw new SyncError(502, "Empty sync response.");
 	const reader = response.body.getReader();
@@ -36,7 +75,7 @@ export async function boundedJSON(response: Response) {
 		return JSON.parse(Buffer.concat(parts).toString("utf8"));
 	} finally { await reader.cancel().catch(() => {}); }
 }
-export function remoteSessions(connection: SyncConnection, signal: AbortSignal, transport: typeof fetch = fetch) {
+export function remoteSessions(connection: SyncConnection, signal: AbortSignal, transport: typeof fetch = syncFetch) {
 	async function request(route: string, body?: unknown) {
 		const res = await transport(`${connection.url}${route}`, {
 			method: body === undefined ? "GET" : "PUT", redirect: "error",

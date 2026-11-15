@@ -47,10 +47,10 @@ export function SessionSync() {
 				<button type="button" className={button} disabled={!code.trim() || busy} onClick={() => void action("connect")}>Connect to Mac</button>
 				{status.canHost && <details className="min-w-0 rounded-md border p-3">
 					<summary className="cursor-pointer text-sm">Use this Mac as the sync host</summary>
-					<label className="mt-3 block text-sm">This Mac's Tailscale IP
-						<input value={address} onChange={event => setAddress(event.target.value)} placeholder="100.x.x.x" autoComplete="off" inputMode="decimal" className="mt-2 block min-h-11 w-full min-w-0 rounded-md border bg-background px-3 text-base" />
+					<label className="mt-3 block text-sm">This Mac's Tailscale hostname
+						<input value={address} onChange={event => setAddress(event.target.value)} placeholder="your-mac.your-tailnet.ts.net" autoComplete="off" autoCapitalize="none" spellCheck={false} className="mt-2 block min-h-11 w-full min-w-0 rounded-md border bg-background px-3 text-base" />
 					</label>
-					<p className="mt-2 text-xs text-muted-foreground">Forward private Tailscale TCP port 47823 to localhost:47823 on this Mac. Setup instructions are included with the release.</p>
+					<p className="mt-2 text-xs text-muted-foreground">Set up private Tailscale HTTPS on port 47823 on this Mac. Setup instructions are included with the release.</p>
 					<button type="button" className={`${button} mt-3`} disabled={!address.trim() || busy} onClick={() => void action("host")}>Start sync host</button>
 				</details>}
 			</> : <>

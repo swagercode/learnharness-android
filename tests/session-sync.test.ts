@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { atomicJSON, packageHash, sessionRecords, SyncError, validatePackage, type SessionPackage } from "../src/store/session-sync.ts";
-import { decodePairing, emptySyncState, encodePairing, remoteSessions, syncSessions, validateConnection } from "../src/server/sync/client.ts";
+import { decodePairing, emptySyncState, encodePairing, isTailnetIPv4, remoteSessions, syncSessions, validateConnection } from "../src/server/sync/client.ts";
 import { syncHost } from "../src/server/sync/host.ts";
 
 function fixture(id = "chat_fixture", text = "Original", jobs = true): SessionPackage {
@@ -120,9 +120,9 @@ test("interrupted multi-file import rolls forward from its private journal", t =
 	assert(!fs.existsSync(path.join(dir, "left/sync-private/pending/chat_fixture.json")));
 });
 test("pairing only accepts private Tailscale addresses and round-trips the secret", () => {
-	const connection = { url: "http://100.100.100.100:47823", token: "a".repeat(64), hostId: randomUUID() };
+	const connection = { url: "https://mac.tailnet-test.ts.net:47823", token: "a".repeat(64), hostId: randomUUID() };
 	assert.deepEqual(decodePairing(encodePairing(connection)), connection);
-	for (const url of ["http://127.0.0.1:47823", "http://192.168.1.1:47823", "http://example.com:47823", "http://100.63.1.1:47823", "http://100.128.1.1:47823", "http://100.100.100.100:47823/path", "http://100.100.100.100:47823/?secret=x"])
+	for (const url of ["http://mac.tailnet-test.ts.net:47823", "https://mac.tailnet-test.ts.net.evil.com:47823", "https://example.com:47823", "https://100.100.100.100:47823", "https://mac.tailnet-test.ts.net", "https://user@mac.tailnet-test.ts.net:47823", "http://127.0.0.1:47823", "http://192.168.1.1:47823", "http://example.com:47823", "http://100.63.1.1:47823", "http://100.128.1.1:47823", "https://mac.tailnet-test.ts.net:47823/path", "https://mac.tailnet-test.ts.net:47823/?secret=x"])
 		assert.throws(() => validateConnection({ ...connection, url }));
 });
 test("real HTTP sync requires pairing, rejects browser requests, enforces CAS and round-trips artifacts", async t => {
@@ -141,4 +141,9 @@ test("real HTTP sync requires pairing, rejects browser requests, enforces CAS an
 	assert.deepEqual(await remote.get("chat_fixture"), fixture());
 	await assert.rejects(remote.put(fixture("chat_fixture", "Stale"), null), (e: unknown) => e instanceof SyncError && e.status === 409);
 	await assert.rejects(remoteSessions({ url, token, hostId: randomUUID() }, new AbortController().signal).manifest(), /identity/);
+});
+
+test("MagicDNS fallback rejects destinations outside the Tailscale address range", () => {
+	for (const ip of ["100.64.0.1", "100.127.255.254"]) assert(isTailnetIPv4(ip));
+	for (const ip of ["127.0.0.1", "192.168.1.1", "100.63.0.1", "100.128.0.1", "100.100.1.999", "example.com"]) assert(!isTailnetIPv4(ip));
 });

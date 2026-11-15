@@ -19,9 +19,9 @@ try {
 				if (req.method() === "POST") {
 					const body = JSON.parse(req.postData()); writes.push(body);
 					if (body.action === "connect" && reject) { response = { error: "Mac unavailable. Connect Tailscale on both devices." }; code = 503; reject = false; }
-					else if (body.action === "connect") response = status = { mode: "client", canHost: status.canHost, url: "http://100.100.100.100:47823", lastSync: new Date().toISOString(), conflicts: 1, deferred: 1 };
+					else if (body.action === "connect") response = status = { mode: "client", canHost: status.canHost, url: "https://mac.tailnet-test.ts.net:47823", lastSync: new Date().toISOString(), conflicts: 1, deferred: 1 };
 					else if (body.action === "disconnect") response = status = { mode: "off", canHost: status.canHost };
-					else if (body.action === "host") response = status = { mode: "host", canHost: true, url: "http://100.100.100.100:47823" };
+					else if (body.action === "host") response = status = { mode: "host", canHost: true, url: "https://mac.tailnet-test.ts.net:47823" };
 					else if (body.action === "pairing") response = { ...status, code: "lh-sync-1:" + "synthetic_private_fixture_".repeat(18) };
 				}
 				return void req.respond({ status: code, contentType: "application/json", body: JSON.stringify(response) });
@@ -59,7 +59,7 @@ try {
 		await click("Disconnect sync"); await page.waitForSelector('[data-testid="sync-pairing-input"]');
 		if (status.canHost) {
 			await page.click('[data-testid="session-sync"] summary');
-			await page.type('[data-testid="session-sync"] input', "100.100.100.100");
+			await page.type('[data-testid="session-sync"] input', "mac.tailnet-test.ts.net");
 			await click("Start sync host");
 			await page.waitForFunction(() => document.querySelector('[data-testid="session-sync"]').textContent.includes("Show pairing code"));
 			await click("Show pairing code"); await page.waitForSelector('textarea[aria-label="Private pairing code"]');
