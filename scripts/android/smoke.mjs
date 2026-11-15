@@ -143,6 +143,22 @@ try {
 	await tapDocumentUi("text", "lh-smoke-notes.txt");
 	await page.waitForFunction(() => window.__qaFileText === "Android native chooser smoke", { timeout: 15000 });
 
+	// A sync conflict is a top-level app dialog. Back must dismiss it without
+	// navigating the lesson or choosing a source. No real sync request is made.
+	await page.setRequestInterception(true);
+	const interceptSync = req => {
+		if (new URL(req.url()).pathname === "/api/sync") return void req.respond({ status: 200, contentType: "application/json", body: JSON.stringify({ mode: "client", conflicts: 1, pending: [{ id: "chat_smoke", title: "Sync source check", localHash: "a".repeat(64), remoteHash: "b".repeat(64), localUpdatedAt: "2026-11-15", remoteUpdatedAt: "2026-11-15", localMessages: 10, remoteMessages: 12 }] }) });
+		void req.continue();
+	};
+	page.on("request", interceptSync);
+	await page.evaluate(() => window.dispatchEvent(new Event("lh:sync-status-changed")));
+	await page.waitForSelector('[data-testid="sync-conflict-dialog"]', { visible: true });
+	const beforeBack = page.url();
+	adb("shell", "input", "keyevent", "4");
+	await page.waitForFunction(() => !document.querySelector('[data-testid="sync-conflict-dialog"]'));
+	assert.equal(page.url(), beforeBack, "Back dismisses the sync choice without navigation");
+	page.off("request", interceptSync); await page.setRequestInterception(false);
+
 	// Exercise the actual web subscription flow. No account or paid inference
 	// is used: merely open the OpenAI authorization page, then cancel.
 	const login = await (await request("/api/subscriptions", { method: "POST", body: JSON.stringify({ providerId: "chatgpt", op: "login" }) })).json();
@@ -180,7 +196,7 @@ try {
 	assert(saved.chats.some((entry) => entry.id === chat.id), "Learning sessions survive process restart and offline startup");
 	const offlinePage = await connectWebView(origin);
 	assert.equal(await offlinePage.evaluate(() => window.innerWidth > window.innerHeight), true, "Offline restart renders the landscape WebView");
-	console.log("Android smoke passed: native runtime, HTTP boundary, WebView, rotations, repeated popup cleanup, file selection, system-browser Pro sign-in launch, persistent offline sessions.");
+	console.log("Android smoke passed: native runtime, HTTP boundary, WebView, rotations, repeated popup cleanup, file selection, sync conflict Back dismissal, system-browser Pro sign-in launch, persistent offline sessions.");
 } finally {
 	try { await fs.writeFile(path.join(artifacts, "final-screen.png"), execFileSync("adb", ["exec-out", "screencap", "-p"], { timeout: 20000 })); } catch { }
 	if (browser) await browser.disconnect();

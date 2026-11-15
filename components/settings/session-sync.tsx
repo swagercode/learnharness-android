@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { SYNC_REVIEW_EVENT, SYNC_STATUS_EVENT } from "../session-sync-events";
 
 interface Status { mode: "off" | "host" | "client"; canHost: boolean; url?: string; busy?: boolean; lastSync?: string; error?: string; conflicts?: number; deferred?: number; code?: string }
 export function SessionSync() {
@@ -21,7 +22,8 @@ export function SessionSync() {
 			} catch { if (active) setError("Could not read sync status. Reopen Settings to retry."); }
 		};
 		void refresh(); const timer = setInterval(() => void refresh(), 5000);
-		return () => { active = false; clearInterval(timer); };
+		window.addEventListener(SYNC_STATUS_EVENT, refresh);
+		return () => { active = false; clearInterval(timer); window.removeEventListener(SYNC_STATUS_EVENT, refresh); };
 	}, []);
 	async function action(action: string) {
 		if (busy) return;
@@ -31,6 +33,7 @@ export function SessionSync() {
 			const result = await response.json();
 			if (!response.ok) throw new Error(result.error ?? "Sync could not complete.");
 			setStatus(result); if (action === "connect" || action === "disconnect") setCode("");
+			window.dispatchEvent(new Event(SYNC_STATUS_EVENT));
 		} catch (e) { setError(e instanceof Error ? e.message : "Sync could not complete."); }
 		finally { setBusy(false); }
 	}
@@ -58,7 +61,10 @@ export function SessionSync() {
 				<p className="break-all text-xs text-muted-foreground">{status.url}</p>
 				<p role="status" className="text-sm">{status.busy ? "Syncing…" : status.lastSync ? `Last synced ${new Date(status.lastSync).toLocaleString()}` : status.mode === "host" ? "Ready for your phone to connect." : "Waiting for first sync…"}</p>
 				{!!status.deferred && <p className="text-xs text-muted-foreground">Some sessions are still working or changed during sync. They will retry automatically.</p>}
-				{!!status.conflicts && <p className="text-sm">Changes were made on both devices. Both versions are saved; look for “Offline conflict copy” in your sessions.</p>}
+				{!!status.conflicts && <div className="space-y-2 rounded-md border p-3">
+					<p className="text-sm">{status.conflicts === 1 ? "A session needs" : `${status.conflicts} sessions need`} your choice before syncing. Use the Mac version or upload the phone version to Mac.</p>
+					<button type="button" className={button} onClick={() => window.dispatchEvent(new Event(SYNC_REVIEW_EVENT))}>Choose sync source</button>
+				</div>}
 				<div className="flex flex-wrap gap-2">
 					{status.mode === "client" && <button type="button" className={button} onClick={() => void action("now")}>Sync now</button>}
 					{status.mode === "host" && <button type="button" className={button} onClick={() => void action("pairing")}>Show pairing code</button>}
@@ -72,6 +78,6 @@ export function SessionSync() {
 			</>}
 		</fieldset>}
 		{(error || status?.error) && <p role="alert" className="mt-3 break-words text-sm text-red-500">{error || status?.error}</p>}
-		<p className="mt-3 text-xs text-muted-foreground">Sync includes sessions, plans, completed research and demos. Changes made offline sync when connected again. Conflicting edits keep both copies. Deletions, the knowledge graph, original files, app preferences, API keys and sign-ins stay on each device.</p>
+		<p className="mt-3 text-xs text-muted-foreground">Sync includes sessions, plans, completed research and demos. Changes made offline sync when connected again. If both devices edit a session, you choose which version to keep. Deletions, the knowledge graph, original files, app preferences, API keys and sign-ins stay on each device.</p>
 	</section>;
 }

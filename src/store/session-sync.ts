@@ -135,17 +135,3 @@ export function sessionRecords(dataDir: string, busy: (id: string) => boolean = 
 	return { snapshot, manifest, apply };
 }
 export type SessionRecords = ReturnType<typeof sessionRecords>;
-
-export function conflictCopy(value: SessionPackage, label: string): SessionPackage {
-	const id = `chat_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`;
-	const mapping = new Map<string, string>([[value.chat.id, id], ...value.jobs.map(job => [job.id, `job_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`] as [string, string])]);
-	function remap(v: unknown): unknown {
-		if (typeof v === "string") return mapping.get(v) ?? v;
-		if (Array.isArray(v)) return v.map(remap);
-		if (plain(v)) return Object.fromEntries(Object.entries(v).map(([key, val]) => [key, remap(val)]));
-		return v;
-	}
-	const copy = remap(value) as SessionPackage;
-	copy.chat.title = `${value.chat.title} — ${label} conflict copy`;
-	return copy;
-}

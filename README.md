@@ -43,6 +43,17 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.18
+
+- Conflicting sessions wait for you to choose **Use Mac version** or **Upload to
+  Mac**. A phone dialog explains which copy will be replaced; **Later** leaves
+  the conflict pending. You can reopen it in Settings → General → Session sync.
+- Other sessions keep syncing. Choices survive interruptions and are checked
+  against the versions you reviewed, so newer edits are never silently replaced.
+- Each replaced session keeps a private recovery copy. Existing v17 conflict-copy
+  sessions remain intact; new conflicts do not create duplicate sessions.
+- Works with the v17 Mac sync companion and your existing pairing code.
+
 ## Version 0.4.1-android.17
 
 - Adds private session sync between Android and the matching Mac companion over

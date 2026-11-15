@@ -41,6 +41,8 @@ The Android distribution adds or changes:
   restores the teaching prompts shipped in version 14.
 - Private Tailscale session sync, paired Mac companion, revision checks,
   offline conflict preservation, and interrupted-import recovery.
+- Explicit per-session sync source choices (v18): use the Mac version or upload
+  the phone version, with persistent decisions, revision checks and recovery copies.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:

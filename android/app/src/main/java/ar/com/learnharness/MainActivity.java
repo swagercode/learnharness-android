@@ -289,8 +289,9 @@ public final class MainActivity extends Activity {
 
     @Override public void onBackPressed() {
         if (web == null || !local(web.getUrl())) { navigateBack(); return; }
-        // The sandboxed demo cannot reach this control; it belongs to the app.
-        web.evaluateJavascript("(()=>{const exit=document.querySelector('[data-testid=demo-fullscreen-close]');if(!exit)return false;exit.click();return true;})()",
+        // Dismiss the top sync dialog before navigating or closing a demo.
+        // These controls belong to the app, outside the sandboxed demo.
+        web.evaluateJavascript("(()=>{const exit=document.querySelector('[data-testid=sync-conflict-later]')||document.querySelector('[data-testid=demo-fullscreen-close]');if(!exit)return false;exit.click();return true;})()",
             handled -> { if (!destroyed && !"true".equals(handled)) navigateBack(); });
     }
     private void navigateBack() { if (web != null && web.canGoBack()) web.goBack(); else super.onBackPressed(); }

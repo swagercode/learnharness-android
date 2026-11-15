@@ -26,7 +26,8 @@ async function rpc(name, body) {
 }
 async function start(name) {
 	write(path.join(root, name, "auth.json"), {});
-	const child = spawn(process.execPath, [path.resolve(".next/standalone/server.js")], { env: { ...process.env, NODE_ENV: "production", PORT: String(ports[name]), HOSTNAME: "127.0.0.1", LH_DATA_DIR: folder(name), LH_AUTH_FILE: path.join(root, name, "auth.json"), LH_IGNORE_ENV_KEYS: "1", NEXT_TELEMETRY_DISABLED: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+	const server = name === "mac" && process.env.LH_SYNC_TEST_MAC_SERVER ? process.env.LH_SYNC_TEST_MAC_SERVER : ".next/standalone/server.js";
+	const child = spawn(process.execPath, [path.resolve(server)], { env: { ...process.env, NODE_ENV: "production", PORT: String(ports[name]), HOSTNAME: "127.0.0.1", LH_DATA_DIR: folder(name), LH_AUTH_FILE: path.join(root, name, "auth.json"), LH_IGNORE_ENV_KEYS: "1", NEXT_TELEMETRY_DISABLED: "1" }, stdio: ["ignore", "pipe", "pipe"] });
 	processes.set(name, child); let log = "";
 	child.stdout.on("data", b => { log += b; }); child.stderr.on("data", b => { log += b; });
 	for (let i = 0; i < 60; i++) {
@@ -51,12 +52,24 @@ try {
 	console.log("PASS production apps synchronize both ways through private Tailscale HTTPS");
 	write(path.join(folder("mac"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Mac offline change"));
 	write(path.join(folder("phone"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Phone offline change"));
-	await rpc("phone", { action: "now" }); const status = await settled(); assert.equal(status.conflicts, 1);
-	for (const device of ["phone", "mac"]) {
-		const records = fs.readdirSync(path.join(folder(device), "chats")).map(f => JSON.parse(fs.readFileSync(path.join(folder(device), "chats", f))));
-		assert.equal(records.length, 3); assert(records.some(r => r.title.includes("Phone offline change — Offline conflict copy"))); assert(records.some(r => r.title === "Mac offline change"));
-	}
-	console.log("PASS production conflict handling preserves both offline edits");
+	await rpc("phone", { action: "now" }); let status = await settled(); assert.equal(status.conflicts, 1);
+	const read = device => JSON.parse(fs.readFileSync(path.join(folder(device), "chats/chat_mac_fixture.json")));
+	assert.equal(read("phone").title, "Phone offline change"); assert.equal(read("mac").title, "Mac offline change");
+	for (const device of ["phone", "mac"]) assert.equal(fs.readdirSync(path.join(folder(device), "chats")).length, 2);
+	await stop("phone"); await start("phone"); status = await settled();
+	assert.equal(status.pending.length, 1);
+	console.log("PASS conflicts survive restart without replacing either version or adding duplicate sessions");
+	await rpc("phone", { action: "resolve", resolution: { ...status.pending[0], source: "mac" } });
+	assert.equal((await settled()).conflicts, 0);
+	assert.equal(read("phone").title, "Mac offline change"); assert.equal(read("mac").title, "Mac offline change");
+	write(path.join(folder("phone"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Phone wins next"));
+	write(path.join(folder("mac"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "Mac edited again"));
+	await rpc("phone", { action: "now" }); status = await settled();
+	await rpc("phone", { action: "resolve", resolution: { ...status.pending[0], source: "phone" } });
+	assert.equal((await settled()).conflicts, 0);
+	assert.equal(read("phone").title, "Phone wins next"); assert.equal(read("mac").title, "Phone wins next");
+	for (const device of ["phone", "mac"]) assert.equal(fs.readdirSync(path.join(folder(device), "chats")).length, 2);
+	console.log("PASS explicit Mac and phone source choices converge with private recovery copies");
 	await stop("phone");
 	write(path.join(folder("mac"), "chats/chat_mac_fixture.json"), chat("chat_mac_fixture", "After restart"));
 	await start("phone"); await settled();

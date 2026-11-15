@@ -95,9 +95,20 @@ preferences, credentials, the knowledge graph and source files stay local.
 Deletion is local to each device; it never erases the other device's copy.
 Sessions over 32 MB are refused, and incompatible future schemas are not imported.
 
-Updates compare content hashes against the last common revision. If both
-copies changed offline, sync preserves the phone branch as an “Offline conflict
-copy” on both devices and brings the Mac branch into the original session.
+Updates compare content hashes against the last common revision. In v18, if both
+copies changed offline, that session pauses until you choose its source:
+
+- **Use Mac version** replaces the phone's copy with the Mac's version.
+- **Upload to Mac** replaces the Mac's copy with the phone's version.
+- **Later** leaves both versions untouched and keeps the conflict pending.
+
+The choice appears in a phone dialog and can be reopened from Settings → General
+→ Session sync. Other sessions continue syncing. An approved choice is persisted
+before transfer and retries safely after connection loss or restart. If either
+version changes, the stale choice is discarded and the app asks again. Replaced
+versions are kept privately in the receiving device's recovery history.
+Existing duplicate sessions created by v17 stay intact. V18 is compatible with
+the v17 Mac companion and its existing pairing code; the Mac need not be rebuilt.
 The importer checks that no local work or edits started during a download.
 A journal completes interrupted imports at startup. The previous three imported
 revisions of each session are retained privately under `data/sync-private/history`.
@@ -107,7 +118,8 @@ Validation uses synthetic sessions and dummy pairing secrets. Run
 `NODE_ENV=test npx tsx --test tests/session-sync.test.ts` for transport, conflict,
 CAS, disconnect/reconnect and recovery checks. `scripts/mobile-sync-smoke.mjs`
 checks the pairing UI against an isolated local fixture server and blocks real
-sync/provider writes.
+sync/provider writes. `scripts/mobile-sync-conflict-smoke.mjs` verifies source
+choices, stale choices, offline retry, dismissal and mobile dialog bounds.
 
 ## Astra Fast mode in v16
 

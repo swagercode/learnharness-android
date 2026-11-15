@@ -1,4 +1,5 @@
-import { CHAT_ID, MAX_PACKAGE, SyncError, conflictCopy, packageHash, validatePackage, type Revision, type SessionPackage, type SessionRecords } from "../../store/session-sync.ts";
+import { CHAT_ID, MAX_PACKAGE, SyncError, packageHash, validatePackage, type Revision, type SessionPackage, type SessionRecords } from "../../store/session-sync.ts";
+import type { SyncConflict, SyncResolution } from "../../core/contracts/session-sync.ts";
 import { Resolver } from "node:dns/promises";
 import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
@@ -8,8 +9,11 @@ export interface SyncState {
 	base: Record<string, string>;
 	ignored: string[];
 	conflicts: Record<string, string>;
+	/** Optional for the v17 state-file migration. Old conflict copies stay intact. */
+	pending?: Record<string, SyncConflict>;
+	decisions?: Record<string, SyncResolution>;
 }
-export const emptySyncState = (): SyncState => ({ base: {}, ignored: [], conflicts: {} });
+export const emptySyncState = (): SyncState => ({ base: {}, ignored: [], conflicts: {}, pending: {}, decisions: {} });
 export function validateConnection(value: unknown): SyncConnection {
 	const v = value as SyncConnection;
 	if (!v || typeof v.url !== "string" || !/^[a-f0-9]{64}$/.test(v.token) || !/^[a-f0-9-]{36}$/.test(v.hostId)) throw new SyncError(400, "Invalid pairing code.");
@@ -110,26 +114,59 @@ export function remoteSessions(connection: SyncConnection, signal: AbortSignal, 
 }
 export type RemoteSessions = ReturnType<typeof remoteSessions>;
 
+export function chooseSyncSource(state: SyncState, value: unknown) {
+	const choice = value as SyncResolution;
+	if (!choice || !CHAT_ID.test(choice.id) || !["mac", "phone"].includes(choice.source) || !/^[a-f0-9]{64}$/.test(choice.localHash) || !/^[a-f0-9]{64}$/.test(choice.remoteHash)) throw new SyncError(400, "Choose the Mac or phone version of this session.");
+	const pending = state.pending?.[choice.id];
+	if (!pending || pending.localHash !== choice.localHash || pending.remoteHash !== choice.remoteHash) throw new SyncError(409, "This session changed. Review the versions and choose again.");
+	(state.decisions ??= {})[choice.id] = { id: choice.id, source: choice.source, localHash: choice.localHash, remoteHash: choice.remoteHash };
+}
+
 /** Three-way revision comparison, never wall-clock last-writer-wins.
- * Deletions remain local. Divergent edits become separately named sessions. */
+ * A conflicting session waits for an explicit, revision-bound source choice.
+ * Other sessions keep syncing. Deletions remain local. */
 export async function syncSessions(local: SessionRecords, remote: RemoteSessions, state: SyncState, save: () => void, check: () => void = () => {}) {
 	const result = { uploaded: 0, downloaded: 0, conflicts: 0, deferred: 0 };
+	const pending = state.pending ??= {}, decisions = state.decisions ??= {};
+	const clear = (id: string) => { delete pending[id]; delete decisions[id]; };
 	const index = new Map((await remote.manifest()).map(r => [r.id, r])); check();
 	const localIndex = new Map(local.manifest().map(r => [r.id, r]));
-	for (const id of Object.keys(state.base)) {
+	for (const id of new Set([...Object.keys(state.base), ...Object.keys(pending)])) {
 		if (!localIndex.has(id) && !state.ignored.includes(id)) { state.ignored.push(id); save(); }
 	}
-	for (const id of new Set([...localIndex.keys(), ...index.keys()])) {
+	for (const id of new Set([...localIndex.keys(), ...index.keys(), ...Object.keys(pending)])) {
 		check();
-		if (state.ignored.includes(id)) continue;
+		if (state.ignored.includes(id)) { clear(id); save(); continue; }
 		const remoteRevision = index.get(id);
 		if (remoteRevision?.busy || localIndex.get(id)?.busy) { result.deferred++; continue; }
 		try {
 			const item = local.snapshot(id);
 			const hash = item ? packageHash(item) : null;
 			const remoteHash = remoteRevision?.hash ?? null;
+			const decision = decisions[id];
+			if (decision) {
+				const chosen = decision.source === "phone" ? decision.localHash : decision.remoteHash;
+				// An upload/import may have committed just before a lost response
+				// or process exit. Recover its base before comparing newer edits.
+				if (decision.source === "phone" ? remoteHash === chosen : hash === chosen) {
+					state.base[id] = chosen; clear(id); save();
+				} else if (item && hash === decision.localHash && remoteHash === decision.remoteHash) {
+					if (decision.source === "phone") {
+						await remote.put(item, decision.remoteHash); check(); result.uploaded++;
+					} else {
+						const incoming = await remote.get(id); check();
+						if (packageHash(incoming) !== decision.remoteHash) throw new SyncError(409, "Mac session changed during sync.");
+						local.apply(incoming, decision.localHash); result.downloaded++;
+					}
+					state.base[id] = chosen; clear(id); save(); continue;
+				} else {
+					// A decision never authorizes overwriting a newer version.
+					delete decisions[id]; save();
+				}
+			}
 			const base = state.base[id];
-			if (hash === remoteHash) { if (hash) { state.base[id] = hash; save(); } continue; }
+			if (hash === remoteHash) { if (hash) state.base[id] = hash; clear(id); save(); continue; }
+			if (pending[id] && (!hash || !remoteHash || hash === base || remoteHash === base)) { clear(id); save(); }
 			if (!remoteHash) {
 				// A remote deletion doesn't delete an offline local copy or resurrect
 				// it on the Mac unless the learner has actually edited it since sync.
@@ -147,33 +184,19 @@ export async function syncSessions(local: SessionRecords, remote: RemoteSessions
 				const written = await remote.put(item, base); check(); state.base[id] = written; save(); result.uploaded++;
 				continue;
 			}
+			if (pending[id]?.localHash === hash && pending[id]?.remoteHash === remoteHash) continue;
 			const incoming = await remote.get(id); check();
-			// Recheck before making a conflict copy: active local work always wins
-			// the right to finish before the sync engine touches its session.
 			const current = local.snapshot(id);
 			if (!current || packageHash(current) !== hash) throw new SyncError(409, "Local session changed during sync.");
-			const key = `${id}:${hash}`;
-			let copy = state.conflicts[key] ? local.snapshot(state.conflicts[key]!) : null;
-			if (!copy) {
-				copy = conflictCopy(item, "Offline");
-				local.apply(copy, null); state.conflicts[key] = copy.chat.id; save();
-			}
-			// Save the preserved local branch to the Mac before replacing the
-			// original locally. A failed connection leaves both local copies safe.
-			let copyHash: string;
-			try { copyHash = await remote.put(copy, state.base[copy.chat.id] ?? null); }
-			catch (e) {
-				if (!(e instanceof SyncError) || e.status !== 409) throw e;
-				const existing = await remote.get(copy.chat.id);
-				if (packageHash(existing) !== packageHash(copy)) throw e;
-				copyHash = packageHash(existing);
-			}
-			check(); state.base[copy.chat.id] = copyHash; save();
-			state.base[id] = local.apply(incoming, hash); save(); result.conflicts++; result.downloaded++; result.uploaded++;
+			pending[id] = { id, title: item.chat.title.slice(0, 240), localHash: hash!, remoteHash: packageHash(incoming),
+				localUpdatedAt: item.chat.updatedAt, remoteUpdatedAt: incoming.chat.updatedAt,
+				localMessages: item.chat.messages.length, remoteMessages: incoming.chat.messages.length };
+			save();
 		} catch (e) {
 			if (e instanceof SyncError && [404, 409, 423].includes(e.status)) { result.deferred++; continue; }
 			throw e;
 		}
 	}
+	result.conflicts = Object.keys(pending).length;
 	return result;
 }

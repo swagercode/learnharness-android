@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { atomicJSON, packageHash, type SessionPackage } from "../src/store/session-sync.ts";
+import { atomicJSON, packageHash, sessionRecords, type SessionPackage } from "../src/store/session-sync.ts";
 import { encodePairing } from "../src/server/sync/client.ts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "lh-sync-runtime-"));
@@ -61,4 +61,38 @@ test("the store finishes an interrupted sync before SSR or a resumed lesson read
 	atomicJSON(path.join(root, `sync-private/pending/${item.chat.id}.json`), { package: recovered, remove: [] });
 	assert.equal(chatStore.getChat(item.chat.id)!.title, recovered.chat.title);
 	assert(!fs.existsSync(path.join(root, `sync-private/pending/${item.chat.id}.json`)));
+});
+
+test("conflicts are exposed without secrets and a chosen source is durable before upload", async () => {
+	const peer = { ...connection, hostId: randomUUID() };
+	const local = sessionRecords(root), remote = sessionRecords(path.join(root, "mac-fixture"));
+	const phone: SessionPackage = { ...item, chat: { ...item.chat, id: "chat_choice", title: "Phone choice" } };
+	const mac: SessionPackage = { ...phone, chat: { ...phone.chat, title: "Mac choice" } };
+	local.apply(phone, null); remote.apply(mac, null);
+	let conflictWrites = 0;
+	globalThis.fetch = async (url, options) => {
+		if (String(url).endsWith("/v1/sessions")) return Response.json({ version: 1, hostId: peer.hostId, sessions: remote.manifest() });
+		const id = String(url).split("/").at(-1)!;
+		if (options?.method === "PUT") {
+			const body = JSON.parse(options.body as string);
+			if (id === "chat_choice") {
+				conflictWrites++;
+				const saved = JSON.parse(fs.readFileSync(path.join(root, `sync-private/state-${peer.hostId}.json`), "utf8"));
+				assert.equal(saved.decisions.chat_choice.source, "phone");
+			}
+			return Response.json({ hash: remote.apply(body.package, body.expected) });
+		}
+		const value = remote.snapshot(id)!;
+		return Response.json({ package: value, hash: packageHash(value) });
+	};
+	await configureSync({ action: "connect", code: encodePairing(peer) }); await runSessionSync();
+	let status = await syncStatus(); assert.equal(status.pending.length, 1); assert.equal(conflictWrites, 0);
+	assert(!JSON.stringify(status).includes(peer.token));
+	await configureSync({ action: "disconnect" });
+	await configureSync({ action: "connect", code: encodePairing(peer) }); await runSessionSync();
+	status = await syncStatus(); assert.equal(status.pending.length, 1);
+	await configureSync({ action: "resolve", resolution: { ...status.pending[0], source: "phone" } });
+	assert.equal(conflictWrites, 1); assert.equal((await syncStatus()).conflicts, 0);
+	assert.deepEqual(remote.snapshot("chat_choice"), phone);
+	await configureSync({ action: "disconnect" });
 });

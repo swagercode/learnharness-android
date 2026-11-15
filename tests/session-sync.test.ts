@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { atomicJSON, packageHash, sessionRecords, SyncError, validatePackage, type SessionPackage } from "../src/store/session-sync.ts";
-import { decodePairing, emptySyncState, encodePairing, isTailnetIPv4, remoteSessions, syncSessions, validateConnection } from "../src/server/sync/client.ts";
+import { chooseSyncSource, decodePairing, emptySyncState, encodePairing, isTailnetIPv4, remoteSessions, syncSessions, validateConnection } from "../src/server/sync/client.ts";
 import { syncHost } from "../src/server/sync/host.ts";
 
 function fixture(id = "chat_fixture", text = "Original", jobs = true): SessionPackage {
@@ -35,37 +35,118 @@ test("two-way sync preserves lessons, Fast preference and finished demo artifact
 	assert.deepEqual(right.snapshot("chat_fixture"), phone);
 	assert.equal((await syncSessions(left, remote, state, save)).uploaded, 0);
 });
-test("divergent offline edits preserve both complete branches with distinct artifact identities", async t => {
-	const { left, right, remote, state, save } = setup(t);
-	left.apply(fixture(), null); await syncSessions(left, remote, state, save);
-	const base = state.base.chat_fixture!;
-	left.apply(fixture("chat_fixture", "Phone changed"), base);
-	right.apply(fixture("chat_fixture", "Mac changed"), base);
-	assert.equal((await syncSessions(left, remote, state, save)).conflicts, 1);
+async function divergence(t: TestContext) {
+	const data = setup(t);
+	data.left.apply(fixture(), null); await syncSessions(data.left, data.remote, data.state, data.save);
+	const phone = fixture("chat_fixture", "Phone changed"), mac = fixture("chat_fixture", "Mac changed");
+	phone.jobs[0]!.result = { html: "<p>Phone demo</p>" }; mac.jobs[0]!.result = { html: "<p>Mac demo</p>" };
+	data.left.apply(phone, data.state.base.chat_fixture!); data.right.apply(mac, data.state.base.chat_fixture!);
+	await syncSessions(data.left, data.remote, data.state, data.save);
+	return { ...data, phone, mac };
+}
+function choose(state: ReturnType<typeof emptySyncState>, source: "mac" | "phone") {
+	chooseSyncSource(state, { ...state.pending!.chat_fixture, source });
+}
+test("divergent edits wait unchanged for a choice while unrelated sessions keep syncing", async t => {
+	const { left, right, remote, state, save, phone, mac } = await divergence(t);
+	left.apply(fixture("chat_unrelated", "Another lesson", false), null);
+	const result = await syncSessions(left, remote, state, save);
+	assert.equal(result.conflicts, 1); assert.equal(result.uploaded, 1);
+	assert.deepEqual(left.snapshot("chat_fixture"), phone); assert.deepEqual(right.snapshot("chat_fixture"), mac);
 	assert.equal(left.manifest().length, 2); assert.equal(right.manifest().length, 2);
-	const copyId = left.manifest().find(r => r.id !== "chat_fixture")!.id;
-	const copy = left.snapshot(copyId)!;
-	assert.match(copy.chat.title, /conflict copy/);
-	assert.deepEqual(copy.chat.messages, fixture("chat_fixture", "Phone changed").chat.messages);
-	assert.equal(copy.jobs[0]!.chatId, copyId); assert.notEqual(copy.jobs[0]!.id, "job_fixture");
-	assert.deepEqual(right.snapshot(copyId), copy);
-	assert.deepEqual(left.snapshot("chat_fixture"), fixture("chat_fixture", "Mac changed"));
-	assert.equal((await syncSessions(left, remote, state, save)).conflicts, 0);
+	const restored = JSON.parse(JSON.stringify(state));
+	assert.equal((await syncSessions(left, remote, restored, save)).conflicts, 1);
+	assert.equal(Object.keys(restored.pending).length, 1);
+	assert.equal(restored.pending.chat_fixture.localHash, packageHash(phone));
 });
-test("interrupted conflict upload is idempotent on reconnect", async t => {
-	const { left, right, remote, state, save } = setup(t);
-	left.apply(fixture(), null); await syncSessions(left, remote, state, save);
-	left.apply(fixture("chat_fixture", "Phone"), state.base.chat_fixture!);
-	right.apply(fixture("chat_fixture", "Mac"), state.base.chat_fixture!);
-	let interrupted = false;
-	await assert.rejects(syncSessions(left, { ...remote, put: async (item, expected) => {
-		const result = await remote.put(item, expected);
-		if (!interrupted) { interrupted = true; throw new Error("lost acknowledgment"); }
-		return result;
-	} }, state, save));
+for (const source of ["mac", "phone"] as const) test(`choosing ${source} replaces only the conflicting session and keeps a private recovery copy`, async t => {
+	const { dir, left, right, remote, state, save, phone, mac } = await divergence(t);
+	choose(state, source);
+	assert.equal((await syncSessions(left, remote, state, save)).conflicts, 0);
+	const winner = source === "mac" ? mac : phone, previous = source === "mac" ? phone : mac;
+	assert.deepEqual(left.snapshot("chat_fixture"), winner); assert.deepEqual(right.snapshot("chat_fixture"), winner);
+	assert.equal(left.manifest().length, 1); assert.equal(right.manifest().length, 1);
+	assert.deepEqual(state.pending, {}); assert.deepEqual(state.decisions, {});
+	assert.equal(state.base.chat_fixture, packageHash(winner));
+	const history = path.join(dir, source === "mac" ? "left" : "right", "sync-private/history/chat_fixture", `${packageHash(previous)}.json`);
+	assert.deepEqual(JSON.parse(fs.readFileSync(history, "utf8")), previous);
+});
+test("invalid or stale UI choices are rejected without recording a decision", async t => {
+	const { state } = await divergence(t);
+	assert.throws(() => chooseSyncSource(state, { ...state.pending!.chat_fixture, source: "automatic" }), /Choose/);
+	assert.throws(() => chooseSyncSource(state, { ...state.pending!.chat_fixture, source: "mac", localHash: "a".repeat(64) }), /changed/);
+	assert.throws(() => chooseSyncSource(state, { ...state.pending!.chat_fixture, source: "phone", id: "chat_other" }), /changed/);
+	assert.deepEqual(state.decisions, {});
+});
+for (const source of ["mac", "phone"] as const) test(`a newer ${source === "mac" ? "phone" : "Mac"} edit invalidates the saved ${source} choice`, async t => {
+	const { left, right, remote, state, save, phone, mac } = await divergence(t);
+	choose(state, source);
+	const edited = fixture("chat_fixture", "New work after the choice");
+	if (source === "mac") left.apply(edited, packageHash(phone)); else right.apply(edited, packageHash(mac));
+	assert.equal((await syncSessions(left, remote, state, save)).conflicts, 1);
+	assert.deepEqual(left.snapshot("chat_fixture"), source === "mac" ? edited : phone);
+	assert.deepEqual(right.snapshot("chat_fixture"), source === "mac" ? mac : edited);
+	assert.deepEqual(state.decisions, {});
+});
+test("selected Mac download cannot overwrite a phone edit made during the request", async t => {
+	const { left, right, remote, state, save, phone, mac } = await divergence(t);
+	choose(state, "mac");
+	const edited = fixture("chat_fixture", "Typing during download");
+	assert.equal((await syncSessions(left, { ...remote, get: async id => {
+		left.apply(edited, packageHash(phone)); return remote.get(id);
+	} }, state, save)).deferred, 1);
+	assert.deepEqual(left.snapshot("chat_fixture"), edited); assert.deepEqual(right.snapshot("chat_fixture"), mac);
+});
+test("selected phone upload cannot overwrite a Mac edit made during the request", async t => {
+	const { left, right, remote, state, save, phone, mac } = await divergence(t);
+	choose(state, "phone");
+	const edited = fixture("chat_fixture", "Mac work during upload");
+	assert.equal((await syncSessions(left, { ...remote, put: async (item, expected) => {
+		right.apply(edited, packageHash(mac)); return remote.put(item, expected);
+	} }, state, save)).deferred, 1);
+	assert.deepEqual(left.snapshot("chat_fixture"), phone); assert.deepEqual(right.snapshot("chat_fixture"), edited);
 	await syncSessions(left, remote, state, save);
-	assert.equal(left.manifest().length, 2); assert.equal(right.manifest().length, 2);
-	assert.deepEqual(left.snapshot("chat_fixture"), right.snapshot("chat_fixture"));
+	assert.deepEqual(state.decisions, {}); assert(state.pending!.chat_fixture);
+});
+test("approved upload retries after a lost acknowledgement without duplicates or losing later phone edits", async t => {
+	const { left, right, remote, state, save, phone } = await divergence(t);
+	choose(state, "phone");
+	const durable = JSON.parse(JSON.stringify(state));
+	await assert.rejects(syncSessions(left, { ...remote, put: async (item, expected) => {
+		await remote.put(item, expected); throw new Error("lost acknowledgment");
+	} }, state, save), /lost acknowledgment/);
+	const edited = fixture("chat_fixture", "New phone work after upload");
+	left.apply(edited, packageHash(phone));
+	await syncSessions(left, remote, durable, save);
+	assert.deepEqual(left.snapshot("chat_fixture"), edited); assert.deepEqual(right.snapshot("chat_fixture"), edited);
+	assert.equal(left.manifest().length, 1); assert.equal(right.manifest().length, 1);
+	assert.deepEqual(durable.pending, {});
+});
+test("an approved choice persists through failure before the transfer and retries safely", async t => {
+	const { left, right, remote, state, save, mac } = await divergence(t);
+	choose(state, "mac");
+	await assert.rejects(syncSessions(left, { ...remote, get: async () => { throw new Error("offline"); } }, state, save), /offline/);
+	const restarted = JSON.parse(JSON.stringify(state));
+	await syncSessions(left, remote, restarted, save);
+	assert.deepEqual(left.snapshot("chat_fixture"), mac); assert.deepEqual(right.snapshot("chat_fixture"), mac);
+	assert.deepEqual(restarted.pending, {});
+});
+test("an imported Mac choice recovers its common revision after a process exit before state save", async t => {
+	const { left, right, remote, state, mac } = await divergence(t);
+	choose(state, "mac"); const durable = JSON.parse(JSON.stringify(state));
+	await assert.rejects(syncSessions(left, remote, state, () => { throw new Error("disk interrupted"); }), /disk interrupted/);
+	assert.deepEqual(left.snapshot("chat_fixture"), mac);
+	const newer = fixture("chat_fixture", "Mac advanced after restart"); right.apply(newer, packageHash(mac));
+	await syncSessions(left, remote, durable, () => {});
+	assert.deepEqual(left.snapshot("chat_fixture"), newer); assert.deepEqual(durable.pending, {});
+});
+test("v17 state and existing conflict-copy sessions survive migration", async t => {
+	const { left, right, remote, save } = setup(t);
+	const old = { base: {}, ignored: [], conflicts: { "legacy:hash": "chat_oldcopy" } };
+	left.apply(fixture("chat_oldcopy", "An existing v17 conflict copy", false), null);
+	await syncSessions(left, remote, old, save);
+	assert.deepEqual(left.snapshot("chat_oldcopy"), right.snapshot("chat_oldcopy"));
+	assert.deepEqual(old.conflicts, { "legacy:hash": "chat_oldcopy" });
 });
 test("stale network responses cannot overwrite local edits made during download", async t => {
 	const { left, right, remote, state, save } = setup(t);
@@ -94,11 +175,12 @@ test("deleting a local session does not delete the Mac copy or resurrect it loca
 	assert.equal(left.snapshot("chat_fixture"), null); assert(right.snapshot("chat_fixture"));
 	assert(state.ignored.includes("chat_fixture"));
 });
-test("first pairing with colliding IDs preserves both copies", async t => {
+test("first pairing with colliding IDs waits for a source choice", async t => {
 	const { left, right, remote, state, save } = setup(t);
 	left.apply(fixture("chat_fixture", "Phone"), null); right.apply(fixture("chat_fixture", "Mac"), null);
 	assert.equal((await syncSessions(left, remote, state, save)).conflicts, 1);
-	assert.equal(left.manifest().length, 2);
+	assert.equal(left.manifest().length, 1); assert.equal(right.manifest().length, 1);
+	assert(state.pending!.chat_fixture);
 });
 test("schema, path, job ownership and symlink guards preserve local records", t => {
 	const { dir, left } = setup(t); left.apply(fixture(), null);
