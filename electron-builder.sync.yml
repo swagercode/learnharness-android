@@ -1,0 +1,12 @@
+extends: ./electron-builder.yml
+directories:
+  output: dist/sync-mac
+extraMetadata:
+  version: 0.4.1-sync.17
+  learnHarnessSyncEdition: true
+mac:
+  icon: build/icon.icns
+  type: development
+  identity: Apple Development
+  notarize: false
+publish: null

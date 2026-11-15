@@ -47,6 +47,66 @@ Install updates signed with the same key over the existing app to preserve data.
 Uninstalling or clearing app data removes local sessions and credentials. Backups
 are disabled so device-bound credentials are not copied to another device.
 
+## Private session sync in v17
+
+This release adds two-way session sync to the Android app and a matching Mac
+companion. Tailscale supplies an encrypted private connection; there is no
+public sync server or Tailscale Funnel. The companion serves only a bounded,
+paired session protocol on loopback TCP 47823. Tailscale Serve forwards the
+same private tailnet port to it. Other Tailscale services remain unchanged.
+
+Build the Mac companion after `npm run build` and `node scripts/build-server.mjs`:
+
+```sh
+npx electron-builder --config electron-builder.sync.yml --mac dir --arm64
+node scripts/setup-tailscale-sync.mjs
+```
+
+The local Mac build uses an Apple Development certificate from your keychain,
+keeps hardened runtime enabled, and is not notarized. Keep a copy of your current
+Mac app before replacing it, quit it normally, and open the matching companion.
+It uses the existing `~/Library/Application Support/LearnHarness` data directory.
+Its upstream auto-updater is disabled so an upstream release cannot remove sync.
+Use the matching companion when updating this fork.
+
+The setup script requires Tailscale to be connected on the Mac. It configures
+only TCP port 47823 and saves the pairing secret with owner-only file permissions
+under `data/sync-private`. It never prints the secret, alters session records,
+or replaces existing services on other ports. `LH_SYNC_DATA_DIR` and
+`LH_TAILSCALE_BIN` override its data directory and Tailscale executable.
+
+On the Mac, open Settings → General → Session sync → Show pairing code. On the
+phone, install the signed APK over the current app, connect Tailscale to the same
+account, then paste that code in Session sync → Connect to Mac. The code grants
+read/write access to sessions: keep it private. Disconnecting the host revokes
+access; starting a new host creates a new code. Disconnecting a client preserves
+its sessions. Keep the Mac awake and its app running for sync to be available.
+
+Sync runs after completed session activity and retries every 30 seconds while
+the app runtime is alive. Android may stop the runtime when the app is closed;
+reopening resumes sync. The Mac can show the last successful connection in
+settings, and the phone shows offline errors, deferred work and conflicts.
+
+Only sessions and their completed research/demo/visual/PDF job records sync.
+Per-session plans and model settings are inside the session record. Global
+preferences, credentials, the knowledge graph and source files stay local.
+Deletion is local to each device; it never erases the other device's copy.
+Sessions over 32 MB are refused, and incompatible future schemas are not imported.
+
+Updates compare content hashes against the last common revision. If both
+copies changed offline, sync preserves the phone branch as an “Offline conflict
+copy” on both devices and brings the Mac branch into the original session.
+The importer checks that no local work or edits started during a download.
+A journal completes interrupted imports at startup. The previous three imported
+revisions of each session are retained privately under `data/sync-private/history`.
+Use the ordinary session backup export for an independent portable backup.
+
+Validation uses synthetic sessions and dummy pairing secrets. Run
+`NODE_ENV=test npx tsx --test tests/session-sync.test.ts` for transport, conflict,
+CAS, disconnect/reconnect and recovery checks. `scripts/mobile-sync-smoke.mjs`
+checks the pairing UI against an isolated local fixture server and blocks real
+sync/provider writes.
+
 ## Astra Fast mode in v16
 
 In an existing ChatGPT Astra lesson, tap the thinking-level pill (for example,

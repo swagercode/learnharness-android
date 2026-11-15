@@ -43,6 +43,22 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.17
+
+- Adds private session sync between Android and the matching Mac companion over
+  Tailscale. Pair under Settings → General → Session sync.
+- Syncs sessions, plans, per-session model choices, finished research and demos.
+  Offline changes retry when connected. Active work finishes before syncing.
+- Conflicting edits retain both versions as separate sessions. Deletions stay
+  local. API keys, sign-ins, global preferences, graph data and original source
+  files are not synchronized.
+- Requires the Mac to be awake, LearnHarness open there, and Tailscale connected
+  on both devices. This is private device-to-device sync, not hosted storage.
+- Includes version 16's optional Astra Fast mode and version 14's teaching prompts.
+
+See [Tailscale sync setup](android/README.md#private-session-sync-in-v17) for pairing,
+Mac builds and recovery. Install this APK over your existing signed Android app.
+
 ## Version 0.4.1-android.16
 
 - Adds an opt-in **Astra speed → Standard / Fast** choice inside the thinking

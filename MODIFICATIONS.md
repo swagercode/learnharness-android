@@ -39,6 +39,8 @@ The Android distribution adds or changes:
 - Optional faster processing for ChatGPT Astra, with a per-session opt-in,
   visible usage guidance, and unchanged model and thinking effort. Version 16
   restores the teaching prompts shipped in version 14.
+- Private Tailscale session sync, paired Mac companion, revision checks,
+  offline conflict preservation, and interrupted-import recovery.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:

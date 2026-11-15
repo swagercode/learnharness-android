@@ -51,6 +51,10 @@ const PRODUCT_NAME = "LearnHarness";
 // Must run before the LH_DEV_URL suffix below — dev becomes
 // "LearnHarness-dev".
 app.setName(PRODUCT_NAME);
+// Isolate packaged sync-companion QA from the learner's live Mac profile.
+if (process.env.LH_SYNC_PROFILE && require("../package.json").learnHarnessSyncEdition === true) {
+	app.setPath("userData", path.resolve(process.env.LH_SYNC_PROFILE));
+}
 const AUTH_FILE = () => path.join(app.getPath("userData"), "auth.json");
 const DATA_DIR = () => path.join(app.getPath("userData"), "data");
 
@@ -504,6 +508,12 @@ function installUpdateNow() {
 }
 
 function setupAutoUpdater() {
+	// Keep the sync companion on releases that include session sync.
+	if (require("../package.json").learnHarnessSyncEdition === true) {
+		log("auto-update: sync companion — update with the matching sync release");
+		reportUpdateStatus("disabled");
+		return;
+	}
 	if (!app.isPackaged) {
 		log("auto-update: dev build — updater disabled");
 		reportUpdateStatus("disabled");

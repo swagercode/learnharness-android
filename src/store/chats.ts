@@ -17,6 +17,7 @@ import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
 import type { LhMessage } from "../core/native-messages.ts";
 import { activeProblemOf, danglingQuestionOf } from "../core/native-messages.ts";
 import { phaseAt3Lh } from "../core/phases.ts";
+import { sessionRecords } from "./session-sync.ts";
 
 function chatFile(id: string): string {
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);
@@ -61,7 +62,11 @@ function writeChat(record: ChatRecord): void {
 function getChat(id: string): ChatRecord | null {
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(fs.readFileSync(chatFile(id), "utf-8"));
+		const file = chatFile(id);
+		// A crashed sync import must finish before SSR or a resumed tutor can
+		// read its session, even before the client starts the sync service.
+		if (fs.existsSync(path.join(PATHS.data, "sync-private", "pending", `${id}.json`))) sessionRecords(PATHS.data);
+		parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
 	} catch {
 		return null;
 	}

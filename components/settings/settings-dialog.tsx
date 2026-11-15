@@ -43,6 +43,7 @@ import { useAppearance } from "./appearance.tsx";
 import { SettingsSection } from "./controls.tsx";
 import { UpdateSettings } from "./update-settings.tsx";
 import { SessionBackups } from "./session-backups.tsx";
+import { SessionSync } from "./session-sync.tsx";
 import { AndroidBackground } from "./android-background.tsx";
 import { AppLicense } from "./app-license.tsx";
 import { AgentSection } from "./agent-section.tsx";
@@ -370,6 +371,7 @@ export function SettingsDialogBody({
 										}
 									/>
 									<SessionBackups />
+									<SessionSync />
 									<AndroidBackground />
 									<AppLicense />
 								</SettingsSection>
