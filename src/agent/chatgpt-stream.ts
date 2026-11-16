@@ -6,7 +6,12 @@ import { chatGPTAbortController, chatGPTScope, chatGPTScopeCurrent, chatGPTLease
 import type { AdmissionScope, ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
 import { capturePreparedBackgroundPayload } from "./background-capture.ts";
 import { retryChatGPTRequest } from "./chatgpt-retry.ts";
-import { supportsAstraFastMode } from "../core/fast-mode.ts";
+import { chatGPTServedSpeed, supportsAstraFastMode, type ChatGPTSpeed } from "../core/fast-mode.ts";
+
+// Preserve the provider's completed-response evidence alongside native usage.
+// Do not add application metadata to the model's replayed message history.
+const speeds = new WeakMap<object, ChatGPTSpeed>();
+export function chatGPTSpeedForUsage(usage: object): ChatGPTSpeed | undefined { return speeds.get(usage); }
 
 const USAGE = "https://chatgpt.com/settings/usage";
 export function chatGPTStreamError(message: string, fastMode = false): string {
@@ -30,7 +35,9 @@ export function chatGPTPayload(raw: unknown, selectedModelId: string, fastMode =
 	const out: Record<string, unknown> = { model: selectedModelId, store: false, stream: true };
 	// The saved opt-in owns this field; caller payload hooks cannot enable
 	// a higher-usage tier or silently downgrade an explicit Fast request.
-	if (fastMode && supportsAstraFastMode({ provider: "chatgpt", id: selectedModelId })) out.service_tier = "fast";
+	// The ChatGPT plan endpoint rejects "fast"; "priority" is the documented
+	// equivalent and the value advertised in its account model catalog.
+	if (fastMode && supportsAstraFastMode({ provider: "chatgpt", id: selectedModelId })) out.service_tier = "priority";
 	for (const key of ["instructions", "reasoning", "include", "text", "tool_choice", "parallel_tool_calls", "prompt_cache_key"]) {
 		if (payload[key] !== undefined) out[key] = payload[key];
 	}
@@ -63,6 +70,7 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 		void (async () => {
 			let partial = empty(logicalModel);
 			let completed = false;
+			let servedSpeed: ChatGPTSpeed["served"] = "unconfirmed";
 			let failure = "";
 			let scope: AdmissionScope | undefined;
 			let committed = false;
@@ -110,8 +118,11 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 						return payload;
 					},
 					onProviderStreamEvent: async (raw, model) => {
-						const event = raw as { type?: string; code?: string; error?: { code?: string }; response?: { error?: { code?: string }; status?: string } };
-						if (event.type === "response.completed" && event.response?.status === "completed" && !event.response?.error) completed = true;
+						const event = raw as { type?: string; code?: string; error?: { code?: string }; response?: { error?: { code?: string }; status?: string; service_tier?: unknown } };
+						if (event.type === "response.completed" && event.response?.status === "completed" && !event.response?.error) {
+							completed = true;
+							servedSpeed = chatGPTServedSpeed(event.response.service_tier);
+						}
 						if (["response.incomplete", "response.failed", "error"].includes(event.type ?? "") || event.response?.error) failure = event.code || event.error?.code || event.response?.error?.code || "incomplete terminal response";
 						await options?.onProviderStreamEvent?.(raw, model);
 					},
@@ -122,6 +133,7 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 					partial = { ...message, provider: "chatgpt" };
 					if (event.type === "done") {
 						if (!completed || failure) throw new Error(failure || "missing terminal response.completed");
+						speeds.set(partial.usage, { requested: useFastMode ? "fast" : "standard", served: servedSpeed });
 						terminal = true;
 						output.push({ ...event, message: partial });
 					} else if (event.type === "error") {

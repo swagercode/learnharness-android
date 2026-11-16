@@ -45,6 +45,8 @@ The Android distribution adds or changes:
   session, bounded pre-edit sync checks on both devices, and offline editing.
 - Reviewed duplicate cleanup synchronization (v19), revision guards, recoverable
   archives, restart-safe cleanup markers, and old-session redirects.
+- Corrected ChatGPT Fast request compatibility (v20), with saved per-reply
+  processing-tier evidence and explicit reporting when OpenAI serves Standard.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:

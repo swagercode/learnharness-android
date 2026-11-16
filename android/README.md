@@ -22,6 +22,16 @@ The x86_64 APK is for emulator validation. Both use the same application payload
 Usage is subject to the limits and eligibility of the connected ChatGPT plan.
 The app never falls back to a developer's API key. No account is shipped in it.
 
+### Astra speed in v20
+
+In an Astra session, open the thinking menu and choose **Request Fast**. The
+app uses the `priority` service-tier alias accepted by the ChatGPT plan route.
+After the reply finishes, the same menu shows what OpenAI actually reported:
+Fast confirmed, Standard, or not confirmed. A request can succeed at Standard
+speed despite asking for Fast; this release does not guarantee acceleration.
+Model and reasoning effort stay the same, and there is no API-key fallback.
+Completed speed reports are saved with session usage and included in sync.
+
 Local sessions can be read without internet. Generating new answers and signing
 in require internet. Version `0.4.1-android.6` keeps responses, research, and
 other active jobs running when you leave the app, lock the phone, or swipe it

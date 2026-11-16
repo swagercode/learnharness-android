@@ -9,7 +9,7 @@ import {
 import { piEngineForSpec, type PiEngine } from "../agent/models.ts";
 import { connectionBackgroundAllowed as subscriptionBackgroundAllowed, connectionScopeCurrent, isSubscriptionProvider } from "../agent/subscription-connections.ts";
 import { nativeSubscriptionError } from "../agent/subscription-stream.ts";
-import { chatGPTStreamError } from "../agent/chatgpt-stream.ts";
+import { chatGPTSpeedForUsage, chatGPTStreamError } from "../agent/chatgpt-stream.ts";
 import { SubscriptionRequestCycle, type SubscriptionDispatchLifecycle } from "../agent/subscription-request-cycle.ts";
 import { reconstructRequestCause } from "../core/native-messages.ts";
 import { createJobRunner } from "../agent/subagents/runner.ts";
@@ -394,7 +394,9 @@ export async function handleChatInput(
 	const turnUsageId = crypto.randomUUID();
 	const steps: CallUsage[] = [];
 	const collectUsage = (usage: Usage) => {
+		const chatgptSpeed = chatGPTSpeedForUsage(usage);
 		steps.push({
+			...(chatgptSpeed ? { chatgptSpeed } : {}),
 			inputTokens: usage.input,
 			outputTokens: usage.output,
 			cacheReadTokens: usage.cacheRead,

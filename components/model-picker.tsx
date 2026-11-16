@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ChatSettings, ModelCatalogEntry, ModelCatalogResponse, ModelsSettings, UserSettings } from "@/src/core";
+import type { ChatSettings, ModelCatalogEntry, ModelCatalogResponse, ModelsSettings, UserSettings, TurnUsage } from "@/src/core";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { prettyModel } from "@/components/usage-format";
 import { ModelMenuList, ThinkingMenuList } from "@/components/settings/model-menu";
@@ -12,7 +12,7 @@ import { notifySettingsSaved, useSettingsSaved } from "@/components/settings-sig
 import { useModelCatalog } from "@/components/model-catalog";
 export { useModelCatalog } from "@/components/model-catalog";
 import { defaultOrderLevel, populateLevel, THINKING_LABEL } from "@/components/thinking-default";
-import { supportsAstraFastMode } from "@/src/core/fast-mode";
+import { chatGPTSpeedLabel, supportsAstraFastMode } from "@/src/core/fast-mode";
 import { ZapIcon } from "lucide-react";
 
 /** provider:id → known contextWindow over the cached catalog, mirroring
@@ -39,7 +39,7 @@ export function catalogLimits(catalog: Pick<ModelCatalogResponse, "models">): Ma
  * changing the new-session default. Unpicked reads "—" (the
  * no-factory-fallback language: the UI never presents a default model).
  */
-export function ModelControl({ chatId, onModelChange }: { chatId?: string; onModelChange?: (model: string | undefined) => void }) {
+export function ModelControl({ chatId, onModelChange, turns = [] }: { chatId?: string; onModelChange?: (model: string | undefined) => void; turns?: TurnUsage[] }) {
 	const { catalog, refresh } = useModelCatalog();
 	const [models, setModels] = useState<ModelsSettings | undefined>();
 	// A successful read with no settings is a legacy session; undefined
@@ -103,6 +103,7 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 	const effectiveProvider = override?.model?.provider;
 	const offersFastMode = !!chatId && supportsAstraFastMode(override?.model);
 	const fastMode = offersFastMode && override?.fastMode === true;
+	const lastSpeed = turns.findLast(turn => turn.model === `${effectiveProvider}:${effectiveId}`)?.steps.at(-1)?.chatgptSpeed;
 	useEffect(() => {
 		onModelChange?.(effectiveProvider && effectiveId ? `${effectiveProvider}:${effectiveId}` : undefined);
 	}, [effectiveProvider, effectiveId, onModelChange]);
@@ -323,7 +324,7 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 				type="button"
 				data-testid="stats-thinking"
 				disabled={savingSession}
-				aria-label={offersFastMode ? `Thinking: ${effectiveLevel ?? "unset"}. Astra speed: ${fastMode ? "Fast" : "Standard"}` : undefined}
+				aria-label={offersFastMode ? `Thinking: ${effectiveLevel ?? "unset"}. Astra speed: ${fastMode ? "Fast requested" : "Standard"}` : undefined}
 				onClick={() => {
 					// No model picked → nothing to set a level FOR: the click
 					// is a no-op, never an empty menu.
@@ -398,10 +399,11 @@ export function ModelControl({ chatId, onModelChange }: { chatId?: string; onMod
 								className={`flex min-h-11 w-full items-center justify-between rounded-lg px-2 py-2 text-left hover:bg-muted ${fastMode === enabled ? "bg-muted/60" : ""}`}
 								onClick={() => void saveChat({ model: { provider: effectiveProvider!, id: effectiveId! }, thinkingLevel: effectiveLevel, fastMode: enabled })}
 							>
-								<span>{enabled ? "Fast · higher usage" : "Standard"}</span>
+								<span>{enabled ? "Request Fast · higher usage" : "Standard"}</span>
 								{fastMode === enabled && <span aria-hidden="true">✓</span>}
 							</button>)}
-							<p className="px-2 pt-2 leading-relaxed text-muted-foreground">Same model and thinking level. Fast may use more of your ChatGPT plan; availability depends on your account. Saved for this session and applied from your next turn.</p>
+							<p className="px-2 pt-2 leading-relaxed text-muted-foreground">Same model and thinking level. Fast may use more of your ChatGPT plan. OpenAI can serve Standard even when Fast is requested. Saved for this session and applied from your next turn.</p>
+							<p data-testid="astra-speed-result" className="px-2 pt-2 leading-relaxed text-muted-foreground" aria-live="polite">{chatGPTSpeedLabel(lastSpeed)}</p>
 						</div>}
 					</fieldset>
 					{error && <div className="mt-1 text-destructive">{error}</div>}

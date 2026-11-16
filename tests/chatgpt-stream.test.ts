@@ -8,7 +8,7 @@ import path from "node:path";
 import { backgroundCaptureDir, backgroundCaptureStream, createBackgroundCapture } from "../src/agent/background-capture.ts";
 import { piModels, piEngineForSpec } from "../src/agent/models.ts";
 import { chatGPTAbortController, chatGPTModels, refreshChatGPTModels } from "../src/agent/chatgpt-bridge.ts";
-import { chatGPTHistory, chatGPTPayload } from "../src/agent/chatgpt-stream.ts";
+import { chatGPTHistory, chatGPTPayload, chatGPTSpeedForUsage } from "../src/agent/chatgpt-stream.ts";
 
 const originalSend = Object.getOwnPropertyDescriptor(process, "send");
 const originalConnected = Object.getOwnPropertyDescriptor(process, "connected");
@@ -117,7 +117,7 @@ test("Astra Fast opt-in reaches the final OAuth request and preserves Low effort
 		for (const request of requests) {
 			assert.equal(request.body.model, astra.id);
 			assert.equal(request.body.reasoning.effort, "low");
-			assert.equal(request.body.service_tier, fastMode ? "fast" : undefined);
+			assert.equal(request.body.service_tier, fastMode ? "priority" : undefined);
 			assert.equal(request.authorization, "Bearer scratch-oauth-only");
 		}
 	}
@@ -133,7 +133,31 @@ test("Fast tier refusal explains how to return to Standard without silently chan
 	assert.match(result.errorMessage!, /Choose Standard/);
 	assert(!result.errorMessage!.includes("private account detail"));
 	assert.equal(requests.length, 1);
-	assert.equal(requests[0]!.body.service_tier, "fast");
+	assert.equal(requests[0]!.body.service_tier, "priority");
+});
+
+test("reported processing speed comes from completion, never the request or preliminary events", async () => {
+	for (const [tier, served] of [["priority", "fast"], ["fast", "fast"], ["default", "standard"], ["auto", "unconfirmed"], [undefined, "unconfirmed"]] as const) {
+		requests = [];
+		responseEvents = [
+			{ type: "response.created", response: { id: "resp_scratch", service_tier: "priority" } },
+			{ ...complete(), response: { ...complete().response, service_tier: tier } },
+		];
+		const engine = piEngineForSpec({ provider: "chatgpt", id: astra.id, thinkingLevel: "low", fastMode: true }, false);
+		const result = await engine.streamFn(engine.model, context()).result();
+		assert.equal(result.stopReason, "stop");
+		assert.equal(requests.length, 1, "A Standard response must not trigger another billed request");
+		assert.deepEqual(chatGPTSpeedForUsage(result.usage), { requested: "fast", served });
+		assert(!JSON.stringify(result).includes("chatgptSpeed"), "Processing metadata stays out of model history");
+	}
+	responseEvents = [{ ...complete(), response: { ...complete().response, service_tier: "default" } }];
+	const standard = piEngineForSpec({ provider: "chatgpt", id: astra.id, thinkingLevel: "low" }, false);
+	const result = await standard.streamFn(standard.model, context()).result();
+	assert.deepEqual(chatGPTSpeedForUsage(result.usage), { requested: "standard", served: "standard" });
+	responseEvents = [{ type: "response.failed", response: { status: "failed", service_tier: "priority", error: { code: "server_error" } } }];
+	const failed = await standard.streamFn(standard.model, context()).result();
+	assert.equal(failed.stopReason, "error");
+	assert.equal(chatGPTSpeedForUsage(failed.usage), undefined);
 });
 
 test("no terminal completed is never success; late quota/incomplete streams are actionable/redacted", async () => {

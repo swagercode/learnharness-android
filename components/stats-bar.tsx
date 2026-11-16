@@ -224,7 +224,7 @@ export function StatsBar({
 			{/* The model + thinking control — one controller for the conversation
 			    agents (prober/teacher); the record's `turns` above still folds
 			    the ACTUAL models billed, regardless of what the picker says. */}
-			<ModelControl chatId={chatId} onModelChange={modelChanged} />
+			<ModelControl chatId={chatId} onModelChange={modelChanged} turns={turns} />
 		</div>
 	);
 }

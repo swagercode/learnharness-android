@@ -15,6 +15,10 @@ const graphCostSummary = (input: CostSummaryInput) => foldGraphCostSummary(input
 import type { ModelCatalogResponse, ChatGPTStatus } from "../src/core/index.ts";
 const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, { window: dom.window, document: dom.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, CustomEvent: dom.window.CustomEvent, IS_REACT_ACT_ENVIRONMENT: true, localStorage: { getItem: () => null, setItem() {} } });
+Object.assign(globalThis, {
+ requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(performance.now()), 0),
+ cancelAnimationFrame: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
+});
 const originalFetch = globalThis.fetch;
 let root: Root | undefined, host: HTMLDivElement | undefined;
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; }

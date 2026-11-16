@@ -386,6 +386,7 @@ for (const rejected of [false, true]) test(`Astra speed is explicit and session-
 	await click("stats-thinking");
 	assert.equal(element("astra-speed-standard").getAttribute("aria-pressed"), "true");
 	assert.match(element("astra-speed-options").textContent!, /may use more/);
+	assert.match(element("astra-speed-result").textContent!, /not confirmed/);
 	await click("astra-speed-fast");
 	assert.deepEqual(sessionWrites[0], { model: { provider: astra.provider, id: astra.id }, thinkingLevel: "low", fastMode: true });
 	if (rejected) {
@@ -394,7 +395,7 @@ for (const rejected of [false, true]) test(`Astra speed is explicit and session-
 		assert.equal(session.fastMode, undefined);
 		return;
 	}
-	assert.match(element("stats-thinking").getAttribute("aria-label")!, /Fast/);
+	assert.match(element("stats-thinking").getAttribute("aria-label")!, /Fast requested/);
 	await click("stats-thinking"); await click("thinking-option-high");
 	assert.equal(session.fastMode, true); assert.equal(session.thinkingLevel, "high");
 	// A remount reads persisted session truth rather than inheriting a global speed.
@@ -408,4 +409,24 @@ for (const rejected of [false, true]) test(`Astra speed is explicit and session-
 	await click("stats-thinking");
 	assert.equal(document.querySelector('[data-testid="astra-speed-options"]'), null);
 	assert.equal(writes.length, 0, "No global model settings changed");
+});
+
+for (const [served, expected] of [["standard", /Standard\. Fast was requested/], ["fast", /Fast confirmed by OpenAI/], ["unconfirmed", /not confirmed/]] as const) test(`Astra speed distinguishes the requested tier from completed ${served} processing`, async () => {
+	installFetch();
+	const astra: ModelCatalogEntry = { ...a, provider: "chatgpt", id: "gpt-6-astra", name: "Astra", supportedLevels: ["low"] };
+	const body = catalog(); body.models = [astra];
+	const normalFetch = globalThis.fetch;
+	globalThis.fetch = async (input, init) => {
+		if (input === "/api/settings") return Response.json({ settings: { models: { strong: body.slots.strong } } });
+		if (input === "/api/chats/fixture") return Response.json({ settings: { model: { provider: "chatgpt", id: astra.id }, thinkingLevel: "low", fastMode: true } });
+		return normalFetch(input, init);
+	};
+	const turn = { id: "tier-report", messageId: "reply", at: new Date().toISOString(), model: `chatgpt:${astra.id}`, steps: [{ inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, chatgptSpeed: { requested: "fast" as const, served } }] };
+	await warm(body); await render(<StatsBar turns={[turn]} chatId="fixture" />);
+	await click("stats-thinking");
+	assert.match(element("stats-thinking").getAttribute("aria-label")!, /Fast requested/);
+	assert.match(element("astra-speed-result").textContent!, expected);
+	// Old turns have no report: do not keep displaying an earlier confirmed tier.
+	await render(<StatsBar turns={[turn, { ...turn, id: "old-format", steps: [{ ...turn.steps[0]!, chatgptSpeed: undefined }] }]} chatId="fixture" />);
+	assert.match(element("astra-speed-result").textContent!, /not confirmed/);
 });

@@ -43,6 +43,19 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.20
+
+- Fixes the rejected Astra Fast request: the ChatGPT plan connection uses the
+  documented `priority` alias advertised by its model catalog.
+- The speed menu distinguishes **Fast requested** from the tier reported by
+  OpenAI for the last completed reply. Standard or missing confirmation is shown
+  explicitly; a successful request alone is not presented as verified Fast.
+- Live subscription tests completed both a tool call and its follow-up, but
+  OpenAI reported Standard processing. This release fixes compatibility and
+  reports the result; it does not claim a verified speed increase.
+- Keeps your ChatGPT subscription, model, thinking level, sessions and sync.
+  No API-key billing fallback or repeated inference to chase a faster tier.
+
 ## Version 0.4.1-android.19
 
 - Reviewed duplicate cleanups on the Mac can sync to the phone. The retained
