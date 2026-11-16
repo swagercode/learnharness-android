@@ -43,6 +43,8 @@ The Android distribution adds or changes:
   offline conflict preservation, and interrupted-import recovery.
 - One-time first-sync source selection (v18), automatic latest-version sync per
   session, bounded pre-edit sync checks on both devices, and offline editing.
+- Reviewed duplicate cleanup synchronization (v19), revision guards, recoverable
+  archives, restart-safe cleanup markers, and old-session redirects.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:

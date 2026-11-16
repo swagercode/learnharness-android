@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { SYNC_REVIEW_EVENT, SYNC_STATUS_EVENT } from "../session-sync-events";
 
-interface Status { mode: "off" | "host" | "client"; canHost: boolean; url?: string; busy?: boolean; lastSync?: string; error?: string; initialRequired?: boolean; initialComplete?: boolean; initialSource?: "phone" | "mac"; deferred?: number; code?: string }
+interface Status { mode: "off" | "host" | "client"; canHost: boolean; url?: string; busy?: boolean; lastSync?: string; error?: string; initialRequired?: boolean; initialComplete?: boolean; initialSource?: "phone" | "mac"; deferred?: number; cleanupDeferred?: number; code?: string }
 export function SessionSync() {
 	const [status, setStatus] = useState<Status>();
 	const [source, setSource] = useState<"phone" | "mac">("phone");
@@ -67,6 +67,7 @@ export function SessionSync() {
 				<p className="text-sm font-medium">{status.mode === "host" ? "This Mac is the sync host" : "Connected to your Mac"}</p>
 				<p className="break-all text-xs text-muted-foreground">{status.url}</p>
 				<p role="status" className="text-sm">{status.busy ? "Syncing…" : status.lastSync ? `Last synced ${new Date(status.lastSync).toLocaleString()}` : status.mode === "host" ? "Ready for your phone to connect." : "Waiting for first sync…"}</p>
+				{!!status.cleanupDeferred && <p className="text-xs text-muted-foreground">Duplicate cleanup is waiting for the retained session to sync. Older copies with new edits are kept for review.</p>}
 				{!!status.deferred && <p className="text-xs text-muted-foreground">Some sessions are still working or changed during sync. They will retry automatically.</p>}
 				{status.initialRequired && <div className="space-y-2 rounded-md border p-3">
 					<p className="text-sm">Choose a source once for your first sync. After that, each session uses its latest saved version.</p>
@@ -86,6 +87,6 @@ export function SessionSync() {
 			</>}
 		</fieldset>}
 		{(error || status?.error) && <p role="alert" className="mt-3 break-words text-sm text-red-500">{error || status?.error}</p>}
-		<p className="mt-3 text-xs text-muted-foreground">Sync includes sessions, plans, completed research and demos. Sync checks before you edit when the other device is reachable. Offline work is allowed; the latest saved version of each session syncs in both directions when connected again. Deletions, the knowledge graph, original files, app preferences, API keys and sign-ins stay on each device.</p>
+		<p className="mt-3 text-xs text-muted-foreground">Sync includes sessions, plans, completed research and demos. Sync checks before you edit when the other device is reachable. Offline work is allowed; the latest saved version of each session syncs in both directions when connected again. Reviewed duplicate cleanups sync too. Other deletions, the knowledge graph, original files, app preferences, API keys and sign-ins stay on each device.</p>
 	</section>;
 }

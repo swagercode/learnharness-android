@@ -1,5 +1,6 @@
+import { getChatReplacement } from "@/src/store/chats";
 import { prepareSessionEdit } from "@/src/server/session-sync";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Chat } from "@/components/chat";
 import { slotsConfigured } from "@/src/core";
 import { compactionInFlight, getChat, isTurnRunning, readSettingsRecord, turnFailure } from "@/src/server";
@@ -16,7 +17,11 @@ export default async function ChatPage({
 	const [{ id }, { prompt }] = await Promise.all([params, searchParams]);
 	await prepareSessionEdit(id);
 	const chat = getChat(id);
-	if (!chat) notFound();
+	if (!chat) {
+		const replacement = getChatReplacement(id);
+		if (replacement) redirect(`/chat/${replacement}`);
+		notFound();
+	}
 	// The persistent setup CTA's seed (BYOK, owner 2026-09-22): slotsConfigured
 	// over the settings record, server-read — the same gate home/new read. The
 	// server's 503 stays the truth; this only decides whether the pill rides.

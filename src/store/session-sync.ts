@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { cleanupReplacement } from "../core/session-cleanup.ts";
 import type { ChatRecord } from "../core/contracts/chat.ts";
 import { CURRENT_CHAT_VERSION } from "../core/contracts/chat.ts";
 import type { JobRecord } from "../core/contracts/jobs.ts";
@@ -9,6 +10,12 @@ export const MAX_PACKAGE = 32 * 1024 * 1024;
 export const CHAT_ID = /^chat_[A-Za-z0-9_-]{1,100}$/;
 const JOB_ID = /^job_[A-Za-z0-9_-]{1,100}$/;
 export interface SessionPackage { version: 1; chat: ChatRecord; jobs: JobRecord[] }
+export interface CleanupRequest { version: 1; id: string; revision: string; replacementId: string; createdAt: string }
+export function validateCleanup(value: unknown): CleanupRequest {
+	const v = value as CleanupRequest;
+	if (!v || v.version !== 1 || typeof v.id !== "string" || !CHAT_ID.test(v.id) || typeof v.replacementId !== "string" || !CHAT_ID.test(v.replacementId) || v.id === v.replacementId || typeof v.revision !== "string" || !/^[a-f0-9]{64}$/.test(v.revision) || typeof v.createdAt !== "string" || !Number.isFinite(Date.parse(v.createdAt))) throw new SyncError(400, "Invalid duplicate cleanup request.");
+	return { version: 1, id: v.id, revision: v.revision, replacementId: v.replacementId, createdAt: v.createdAt };
+}
 export interface Revision { id: string; hash: string | null; busy: boolean }
 export class SyncError extends Error {
 	constructor(public status: number, message: string) { super(message); }
@@ -25,6 +32,7 @@ function plain(value: unknown): value is Record<string, unknown> { return !!valu
 export function validatePackage(value: unknown): SessionPackage {
 	if (!plain(value) || value.version !== 1 || !plain(value.chat) || !Array.isArray(value.jobs)) throw new SyncError(400, "Invalid session package.");
 	const chat = value.chat;
+	if (chat.syncCleanup !== undefined) throw new SyncError(409, "An archived duplicate cannot replace a live session.");
 	if (typeof chat.id !== "string" || !CHAT_ID.test(chat.id) || !Array.isArray(chat.messages) || chat.messages.some(message => !plain(message)) || typeof chat.title !== "string" || typeof chat.createdAt !== "string" || typeof chat.updatedAt !== "string") throw new SyncError(400, "Invalid session record.");
 	if (chat.version !== undefined && chat.version !== CURRENT_CHAT_VERSION) throw new SyncError(409, "Update both apps before syncing this session.");
 	const ids = new Set<string>();
@@ -85,6 +93,7 @@ export function sessionRecords(dataDir: string, busy: (id: string) => boolean = 
 		const file = path.join(folder("chats"), `${id}.json`);
 		if (!fs.existsSync(file)) return null;
 		const chat = read(file);
+		if (cleanupReplacement(chat)) return null;
 		if (chat.id !== id) throw new SyncError(409, "Session identity mismatch.");
 		const jobs: JobRecord[] = [];
 		const dir = folder("jobs");
@@ -105,11 +114,13 @@ export function sessionRecords(dataDir: string, busy: (id: string) => boolean = 
 			const id = n.slice(0, -5);
 			try { const item = snapshot(id); return { id, hash: item ? packageHash(item) : null, busy: false }; }
 			catch (e) { if (e instanceof SyncError && e.status === 423) return { id, hash: null, busy: true }; throw e; }
-		});
+		}).filter(revision => revision.hash !== null || revision.busy);
 	}
 	function apply(raw: unknown, expected: string | null) {
 		const value = validatePackage(raw);
 		const id = value.chat.id;
+		const existing = path.join(folder("chats"), `${id}.json`);
+		if (cleanupRequests().some(request => request.id === id) || fs.existsSync(existing) && cleanupReplacement(read(existing))) throw new SyncError(409, "This older duplicate was archived; continue in the newer session.");
 		const previous = snapshot(id);
 		if ((previous ? packageHash(previous) : null) !== expected) throw new SyncError(409, "Session changed during sync; retrying will preserve both versions.");
 		const jobDir = folder("jobs");
@@ -132,6 +143,40 @@ export function sessionRecords(dataDir: string, busy: (id: string) => boolean = 
 		changed(id);
 		return packageHash(value);
 	}
-	return { snapshot, manifest, apply };
+	function cleanupRequests(): CleanupRequest[] {
+		const dir = path.join(dataDir, "sync-private", "cleanup-requests");
+		if (!fs.existsSync(dir)) return [];
+		if (fs.lstatSync(dir).isSymbolicLink()) throw new SyncError(409, "Cannot read linked cleanup requests.");
+		const names = fs.readdirSync(dir).filter(name => name.endsWith(".json") && CHAT_ID.test(name.slice(0, -5)));
+		if (names.length > 2000) throw new SyncError(413, "Too many cleanup requests.");
+		return names.map(name => {
+			const request = validateCleanup(read(path.join(dir, name)));
+			if (request.id !== name.slice(0, -5)) throw new SyncError(409, "Cleanup identity mismatch.");
+			return request;
+		});
+	}
+	function archiveDuplicate(raw: CleanupRequest, expectedReplacement: string): boolean {
+		const request = validateCleanup(raw);
+		const replacement = snapshot(request.replacementId);
+		if (!replacement || packageHash(replacement) !== expectedReplacement) throw new SyncError(409, "The newer session must finish syncing before duplicate cleanup.");
+		const previous = snapshot(request.id);
+		if (!previous) return false; // A restart after the atomic marker is harmless.
+		if (packageHash(previous) !== request.revision) throw new SyncError(409, "The older copy has new edits; it was kept for review.");
+		// One atomic record write makes the archive crash-safe. Messages and jobs
+		// remain recoverable; neither graph content nor unrelated files are removed.
+		atomicJSON(path.join(dataDir, "sync-private", "removed", request.id, `${request.revision}.json`), previous);
+		atomicJSON(path.join(folder("chats"), `${request.id}.json`), { ...previous.chat, syncCleanup: {
+			replacementId: request.replacementId, revision: request.revision, appliedAt: new Date().toISOString(),
+		} });
+		changed(request.id); return true;
+	}
+	/** Explicitly queued by a reviewed cleanup, never inferred from a missing file. */
+	function queueCleanup(raw: CleanupRequest) {
+		const request = validateCleanup(raw), replacement = snapshot(request.replacementId);
+		if (!replacement) throw new SyncError(409, "Keep the newer session before queuing cleanup.");
+		archiveDuplicate(request, packageHash(replacement));
+		atomicJSON(path.join(dataDir, "sync-private", "cleanup-requests", `${request.id}.json`), request);
+	}
+	return { snapshot, manifest, apply, cleanupRequests, archiveDuplicate, queueCleanup };
 }
 export type SessionRecords = ReturnType<typeof sessionRecords>;

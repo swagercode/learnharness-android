@@ -16,7 +16,7 @@ function setup(t: TestContext) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lh-sync-test-"));
 	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 	const left = sessionRecords(path.join(dir, "left")), right = sessionRecords(path.join(dir, "right"));
-	const remote = { manifest: async () => right.manifest(), get: async (id: string) => right.snapshot(id)!, put: async (item: SessionPackage, expected: string | null) => right.apply(item, expected) };
+	const remote = { cleanup: async () => right.cleanupRequests(), manifest: async () => right.manifest(), get: async (id: string) => right.snapshot(id)!, put: async (item: SessionPackage, expected: string | null) => right.apply(item, expected) };
 	return { dir, left, right, remote, state: emptySyncState("phone"), save: () => {} };
 }
 test("two-way sync preserves lessons, Fast preference and finished demo artifacts", async t => {
@@ -201,4 +201,71 @@ test("Mac pre-edit request waits for the phone acknowledgement, with a bounded o
 	await remote.ready(requests.map(r => r.id)); assert.equal(await ready, true);
 	assert.equal(await wakeups.request("chat_offline"), false);
 	wakeups.close();
+});
+
+function cleanupFixture(t: TestContext) {
+	const data = setup(t);
+	const old = fixture("chat_older", "Original", false), kept = fixture("chat_latest", "Original plus more", false);
+	data.left.apply(old, null); data.right.apply(old, null); data.right.apply(kept, null);
+	const request = { version: 1 as const, id: old.chat.id, revision: packageHash(old), replacementId: kept.chat.id, createdAt: "2026-11-15T22:00:00Z" };
+	data.right.queueCleanup(request);
+	return { ...data, old, kept, request };
+}
+test("reviewed cleanup syncs after the latest session arrives, preserves recovery data and survives restart", async t => {
+	const { dir, left, right, remote, state, save, old, kept, request } = cleanupFixture(t);
+	const result = await syncSessions(left, remote, state, save);
+	assert.equal(result.downloaded, 1); assert.equal(result.cleaned, 1); assert.equal(result.cleanupDeferred, 0);
+	assert.equal(left.snapshot(old.chat.id), null); assert.deepEqual(left.snapshot(kept.chat.id), kept);
+	assert.equal(left.manifest().length, 1); assert.equal(right.manifest().length, 1); assert(state.initial?.complete);
+	assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "left/sync-private/removed", old.chat.id, `${request.revision}.json`), "utf8")), old);
+	const restarted = sessionRecords(path.join(dir, "left")), durable = JSON.parse(JSON.stringify(state));
+	assert.equal(restarted.snapshot(old.chat.id), null);
+	let downloads = 0;
+	assert.equal((await syncSessions(restarted, { ...remote, get: async id => { downloads++; return remote.get(id); } }, durable, save)).cleaned, 0);
+	assert.equal(downloads, 0, "Already-applied cleanup does not download the full retained session every poll");
+	assert.throws(() => restarted.apply(old, null), /archived/);
+	assert.throws(() => right.apply(old, null), /archived/);
+});
+test("cleanup keeps an older copy with unsynced new work instead of deleting it", async t => {
+	const { left, remote, state, save, old } = cleanupFixture(t);
+	const changed = { ...old, chat: { ...old.chat, title: "New offline work" } };
+	left.apply(changed, packageHash(old));
+	const result = await syncSessions(left, remote, state, save);
+	assert.equal(result.cleanupDeferred, 1); assert.equal(result.cleaned, 0);
+	assert.deepEqual(left.snapshot(old.chat.id), changed);
+});
+test("cleanup waits for a busy or missing retained session", async t => {
+	const { left, remote, state, save, old, kept } = cleanupFixture(t);
+	const result = await syncSessions(left, { ...remote, manifest: async () => [{ id: kept.chat.id, hash: null, busy: true }] }, state, save);
+	assert.equal(result.cleaned, 0); assert.equal(result.cleanupDeferred, 1);
+	assert.deepEqual(left.snapshot(old.chat.id), old);
+});
+test("cleanup refuses edits to either local session during the retained-copy download", async t => {
+	const { left, remote, state, save, old, kept } = cleanupFixture(t);
+	left.apply(kept, null); state.base[kept.chat.id] = packageHash(kept);
+	const changed = { ...kept, chat: { ...kept.chat, title: "New local work" } };
+	const result = await syncSessions(left, { ...remote, get: async id => {
+		left.apply(changed, packageHash(kept)); return remote.get(id);
+	} }, state, save);
+	assert.equal(result.cleanupDeferred, 1); assert.deepEqual(left.snapshot(old.chat.id), old);
+});
+test("an in-flight session cannot be archived, and live imports cannot smuggle archive markers", t => {
+	const { dir, left, old, kept, request } = cleanupFixture(t); left.apply(kept, null);
+	const busy = sessionRecords(path.join(dir, "left"), id => id === old.chat.id);
+	assert.throws(() => busy.archiveDuplicate(request, packageHash(kept)), (e: unknown) => e instanceof SyncError && e.status === 423);
+	assert.throws(() => left.apply({ ...kept, chat: { ...kept.chat, syncCleanup: { replacementId: "chat_other", revision: request.revision, appliedAt: request.createdAt } } }, packageHash(kept)), /archived/);
+});
+test("authenticated cleanup transport round-trips reviewed requests and old companions remain compatible", async t => {
+	const { right, request } = cleanupFixture(t);
+	const token = "d".repeat(64), hostId = randomUUID(), server = syncHost(right, token, hostId);
+	await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => { server.closeAllConnections(); server.close(); });
+	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+	assert.equal((await fetch(`${url}/v1/cleanup`)).status, 401);
+	const remote = remoteSessions({ url, token, hostId }, new AbortController().signal);
+	assert.deepEqual(await remote.cleanup(), [request]);
+	const older = remoteSessions({ url, token, hostId }, new AbortController().signal, async () => new Response("", { status: 404 }));
+	assert.deepEqual(await older.cleanup(), []);
+	const malformed = remoteSessions({ url, token, hostId }, new AbortController().signal, async () => Response.json({ version: 1, hostId, requests: [{ ...request, id: "../escape" }] }));
+	await assert.rejects(malformed.cleanup(), /Invalid/);
 });

@@ -788,6 +788,11 @@ export function Chat({
 
 	const syncFromServer = useCallback(async () => {
 		const res = await fetch(`/api/chats/${chatId}`);
+		if (res.status === 404) {
+			const value = await res.json().catch(() => null);
+			if (typeof value?.replacementId === "string" && /^chat_[A-Za-z0-9_-]{1,100}$/.test(value.replacementId)) window.location.replace(`/chat/${value.replacementId}`);
+			return;
+		}
 		if (!res.ok) return;
 		const record = (await res.json()) as { messages?: LhMessage[]; turns?: TurnUsage[]; pricing?: SessionPricing; turnError?: string };
 		if (Array.isArray(record.turns)) setTurns(record.turns);

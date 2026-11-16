@@ -33,7 +33,7 @@ interface Runtime {
 	config: Config; host?: Server; timer?: NodeJS.Timeout; kick?: NodeJS.Timeout; unsubscribe?: () => void;
 	running?: Promise<unknown>; controller?: AbortController; generation: number;
 	configuring?: Promise<unknown>; wakeController?: AbortController; wakeups?: SyncWakeups;
-	lastSync?: string; error?: string; deferred: number; initialized: boolean;
+	lastSync?: string; error?: string; deferred: number; cleanupDeferred?: number; initialized: boolean;
 }
 const globalSync = globalThis as typeof globalThis & { __lhSessionSync?: Runtime };
 function runtime() { return globalSync.__lhSessionSync ??= { config: { mode: "off" }, generation: 0, deferred: 0, initialized: false }; }
@@ -58,7 +58,7 @@ export function runSessionSync(): Promise<unknown> {
 			const state = readState(config.hostId);
 			if (!state.initial) return;
 			const result = await syncSessions(records(), remoteSessions(config, controller.signal), state, () => { check(); atomicJSON(file, state); }, check);
-			check(); r.lastSync = new Date().toISOString(); r.error = undefined; r.deferred = result.deferred;
+			check(); r.lastSync = new Date().toISOString(); r.error = undefined; r.deferred = result.deferred; r.cleanupDeferred = result.cleanupDeferred;
 		} catch (e) { if (r.generation === generation) r.error = errorMessage(e); }
 		finally { if (r.controller === controller) { r.running = undefined; r.controller = undefined; } }
 	});
@@ -77,7 +77,7 @@ async function start(config: Config) {
 	}
 	r.host = undefined; r.timer = undefined; r.kick = undefined; r.unsubscribe = undefined;
 	r.wakeController = undefined; r.wakeups = undefined;
-	r.config = config; r.error = undefined; r.lastSync = undefined; r.deferred = 0;
+	r.config = config; r.error = undefined; r.lastSync = undefined; r.deferred = 0; r.cleanupDeferred = 0;
 	if (config.mode === "host") {
 		if (process.env.LH_ANDROID === "1") throw new SyncError(400, "Set up the sync host on your Mac.");
 		r.wakeups = new SyncWakeups();
@@ -116,7 +116,7 @@ export async function syncStatus() {
 	catch { r.error = "Sync state could not be read. Your sessions are preserved."; }
 	return { mode: r.config.mode, canHost: process.env.LH_ANDROID !== "1", url: r.config.mode === "off" ? undefined : r.config.url,
 		busy: !!r.running, lastSync: r.lastSync, error: r.error, initialRequired: r.config.mode === "client" && !initial,
-		initialComplete: initial?.complete ?? false, initialSource: initial?.source, deferred: r.deferred };
+		initialComplete: initial?.complete ?? false, initialSource: initial?.source, deferred: r.deferred, cleanupDeferred: r.cleanupDeferred ?? 0 };
 }
 export function configureSync(input: unknown): Promise<unknown> {
 	const r = runtime();

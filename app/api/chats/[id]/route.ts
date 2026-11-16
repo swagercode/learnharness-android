@@ -1,10 +1,11 @@
+import { getChatReplacement } from "@/src/store/chats";
 import { prepareSessionEdit } from "@/src/server/session-sync";
 import { compactionInFlight, deleteChatSession, getChat, isTurnRunning, sessionCoverage, sessionCost, stores, turnFailure, type ChatDeleteMode } from "@/src/server";
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
 	const chat = getChat(id);
-	if (!chat) return Response.json({ error: "Not found" }, { status: 404 });
+	if (!chat) return Response.json({ error: "Not found", replacementId: getChatReplacement(id) }, { status: 404 });
 	// turnInFlight lets a returning client re-attach to a running turn
 	// (chat-handler write-ahead + registry — see src/server/turn-liveness.ts).
 	// coverage (extraction-UX redesign, 2026-09-24): the chat view's ring

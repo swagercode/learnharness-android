@@ -17,7 +17,8 @@ import { CURRENT_CHAT_VERSION } from "../core/contracts.ts";
 import type { LhMessage } from "../core/native-messages.ts";
 import { activeProblemOf, danglingQuestionOf } from "../core/native-messages.ts";
 import { phaseAt3Lh } from "../core/phases.ts";
-import { sessionRecords } from "./session-sync.ts";
+import { cleanupReplacement } from "../core/session-cleanup.ts";
+import { sessionRecords, validateCleanup } from "./session-sync.ts";
 
 function chatFile(id: string): string {
 	if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Invalid chat id: ${id}`);
@@ -74,12 +75,28 @@ function getChat(id: string): ChatRecord | null {
 	// Honest refusal (owner ruling 2026-10-10): a record stamped NEWER than
 	// this build (the downgrade scenario) reads as absent, never misparsed —
 	// the next read-modify-write must not rewrite what it doesn't understand.
+	if (cleanupReplacement(parsed)) return null;
 	const v = (parsed as { version?: unknown }).version;
 	if (typeof v === "number" && v > CURRENT_CHAT_VERSION) {
 		console.error(`[chat ${id}] record stamped with schema version ${v} > ${CURRENT_CHAT_VERSION} — this app build is older; refusing to read it`);
 		return null;
 	}
 	return parsed as ChatRecord;
+}
+
+/** Route old links to a live retained copy after a synchronized cleanup. */
+export function getChatReplacement(id: string): string | undefined {
+	if (!/^chat_[A-Za-z0-9_-]{1,100}$/.test(id)) return undefined;
+	try {
+		let replacement: string | undefined;
+		try { replacement = cleanupReplacement(JSON.parse(fs.readFileSync(chatFile(id), "utf8"))); }
+		catch { /* The Mac cleanup may have removed the old file before queuing. */ }
+		if (!replacement) {
+			const request = validateCleanup(JSON.parse(fs.readFileSync(path.join(PATHS.data, "sync-private", "cleanup-requests", `${id}.json`), "utf8")));
+			if (request.id === id) replacement = request.replacementId;
+		}
+		return replacement && getChat(replacement) ? replacement : undefined;
+	} catch { return undefined; }
 }
 
 function listChats(): ChatSummary[] {

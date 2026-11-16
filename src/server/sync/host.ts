@@ -37,6 +37,9 @@ export function syncHost(records: SessionRecords, token: string, hostId: string,
 				if (!Array.isArray(value?.ids) || value.ids.length > 100 || value.ids.some((id: unknown) => typeof id !== "string" || !/^[a-f0-9-]{36}$/.test(id))) throw new SyncError(400, "Invalid sync acknowledgement.");
 				wakeups.ready(value.ids); respond(res, 200, { ok: true }); return;
 			}
+			if (req.method === "GET" && req.url === "/v1/cleanup") {
+				respond(res, 200, { version: 1, hostId, requests: records.cleanupRequests() }); return;
+			}
 			if (req.method === "GET" && req.url === "/v1/sessions") {
 				respond(res, 200, { version: 1, hostId, sessions: records.manifest() }); activity(); return;
 			}

@@ -1,4 +1,4 @@
-import { CHAT_ID, MAX_PACKAGE, SyncError, packageHash, validatePackage, type Revision, type SessionPackage, type SessionRecords } from "../../store/session-sync.ts";
+import { CHAT_ID, MAX_PACKAGE, SyncError, packageHash, validatePackage, validateCleanup, type CleanupRequest, type Revision, type SessionPackage, type SessionRecords } from "../../store/session-sync.ts";
 
 import { Resolver } from "node:dns/promises";
 import { request as httpsRequest } from "node:https";
@@ -9,6 +9,7 @@ export type SyncSource = "phone" | "mac";
 export interface SyncState {
 	base: Record<string, string>;
 	ignored: string[];
+	completedCleanup?: Record<string, string>;
 	/** v17 legacy copy mapping, retained without deleting its sessions. */
 	conflicts?: Record<string, string>;
 	initial?: { source: SyncSource; remaining?: string[]; complete?: boolean };
@@ -105,6 +106,13 @@ export function remoteSessions(connection: SyncConnection, signal: AbortSignal, 
 			if (value.version !== 1 || value.hostId !== connection.hostId || !Array.isArray(value.sessions) || value.sessions.length > 2000 || value.sessions.some((r: Revision) => !CHAT_ID.test(r.id) || typeof r.busy !== "boolean" || !(r.hash === null || /^[a-f0-9]{64}$/.test(r.hash)))) throw new SyncError(409, "The Mac's sync identity or format changed. Pair again.");
 			return value.sessions;
 		},
+		async cleanup(): Promise<CleanupRequest[]> {
+			let value;
+			try { value = await request("/v1/cleanup"); }
+			catch (error) { if (error instanceof SyncError && error.status === 404) return []; throw error; }
+			if (value.version !== 1 || value.hostId !== connection.hostId || !Array.isArray(value.requests) || value.requests.length > 2000) throw new SyncError(409, "The Mac's cleanup identity or format changed.");
+			return value.requests.map(validateCleanup);
+		},
 		async get(id: string): Promise<SessionPackage> {
 			const value = await request(`/v1/sessions/${id}`);
 			const item = validatePackage(value.package);
@@ -118,7 +126,7 @@ export function remoteSessions(connection: SyncConnection, signal: AbortSignal, 
 		},
 	};
 }
-export type RemoteSessions = Pick<ReturnType<typeof remoteSessions>, "manifest" | "get" | "put">;
+export type RemoteSessions = Pick<ReturnType<typeof remoteSessions>, "manifest" | "get" | "put"> & { cleanup?: () => Promise<CleanupRequest[]> };
 
 /** Includes non-sidebar edits and completed artifact changes. Imports retain
  * the source timestamps; they never manufacture a newer revision. */
@@ -135,9 +143,11 @@ export function latestSource(local: SessionPackage, remote: SessionPackage, tie:
  * a one-sided change always propagates; simultaneous offline changes use the
  * newest saved version of that session, with the replaced revision backed up. */
 export async function syncSessions(local: SessionRecords, remote: RemoteSessions, state: SyncState, save: () => void, check: () => void = () => {}, onlyId?: string) {
-	const result = { uploaded: 0, downloaded: 0, deferred: 0 };
+	const result = { uploaded: 0, downloaded: 0, deferred: 0, cleaned: 0, cleanupDeferred: 0 };
 	if (!state.initial) return result;
 	const index = new Map((await remote.manifest()).map(r => [r.id, r])); check();
+	const cleanup = (await remote.cleanup?.() ?? []).map(validateCleanup); check();
+	const cleanupIds = new Set(cleanup.map(request => request.id));
 	const localIndex = new Map(local.manifest().map(r => [r.id, r]));
 	if (!state.initial.complete && !state.initial.remaining) {
 		state.initial.remaining = [...new Set([...localIndex.keys(), ...index.keys()])]; save();
@@ -151,6 +161,7 @@ export async function syncSessions(local: SessionRecords, remote: RemoteSessions
 	for (const id of new Set([...localIndex.keys(), ...index.keys(), ...initialIds])) {
 		if (onlyId && state.initial.complete && id !== onlyId) continue;
 		check();
+		if (cleanupIds.has(id)) continue; // Never resurrect a queued older duplicate.
 		if (state.ignored.includes(id)) { if (initialIds.has(id)) settled(id); continue; }
 		const remoteRevision = index.get(id);
 		if (remoteRevision?.busy || localIndex.get(id)?.busy) { result.deferred++; continue; }
@@ -189,6 +200,28 @@ export async function syncSessions(local: SessionRecords, remote: RemoteSessions
 		} catch (e) {
 			if (e instanceof SyncError && [404, 409, 423].includes(e.status)) { result.deferred++; continue; }
 			throw e;
+		}
+	}
+	for (const request of cleanup) {
+		check();
+		try {
+			if (state.completedCleanup?.[request.id] === request.revision && !local.snapshot(request.id)) {
+				if (initialIds.has(request.id)) settled(request.id);
+				continue;
+			}
+			const expected = state.base[request.replacementId];
+			if (!expected) throw new SyncError(409, "Newer session is not synced yet.");
+			// Check the remote retained revision again after transfers. An offline
+			// edit, busy turn or deferred download must not remove the old copy.
+			const replacement = await remote.get(request.replacementId); check();
+			if (packageHash(replacement) !== expected) throw new SyncError(409, "The retained session changed during cleanup.");
+			if (local.archiveDuplicate(request, expected)) result.cleaned++;
+			if (!state.ignored.includes(request.id)) state.ignored.push(request.id);
+			(state.completedCleanup ??= {})[request.id] = request.revision;
+			delete state.base[request.id]; settled(request.id);
+		} catch (error) {
+			if (error instanceof SyncError && [404, 409, 423].includes(error.status)) { result.deferred++; result.cleanupDeferred++; continue; }
+			throw error;
 		}
 	}
 	if (!initialIds.size && !state.initial.complete) { state.initial.complete = true; save(); }

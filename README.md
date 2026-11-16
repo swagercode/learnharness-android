@@ -43,6 +43,17 @@ Allow notifications when asked. Android can still interrupt background work
 because of force-stop, restart, memory pressure, battery restrictions, or the
 foreground-service time budget; see [background behavior](android/README.md).
 
+## Version 0.4.1-android.19
+
+- Reviewed duplicate cleanups on the Mac can sync to the phone. The retained
+  session must be fully synchronized before the older duplicate is archived.
+- Older copies with new edits or running work stay available until safe to
+  resolve. Archived messages and artifacts are preserved for recovery.
+- Old session links open the retained session. Queued cleanup survives restarts
+  and prevents an older duplicate from being uploaded back to the Mac.
+- Requires the matching v19 Mac companion; existing pairing codes still work.
+  Normal session edits, Astra Fast mode and teaching behavior are unchanged.
+
 ## Version 0.4.1-android.18
 
 - First sync uses your selected device for shared sessions; **Upload phone to

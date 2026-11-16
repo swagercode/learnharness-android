@@ -131,6 +131,30 @@ isolated fixture server. `scripts/sync-runtime-smoke.mjs` verifies two productio
 runtimes over private Tailscale HTTPS, including pre-edit checks in both directions
 and bounded offline editing.
 
+## Synchronized duplicate cleanup in v19
+
+A reviewed Mac cleanup can queue a private request containing the removed
+session ID, its exact package revision and the retained session ID. V19 phones
+fetch these requests over the same authenticated Tailscale connection. Mere file
+absence never implies deletion, and ordinary session deletions remain local.
+
+The phone synchronizes the retained session first, verifies the common revision,
+and archives the duplicate only if its own old revision still matches. Running
+work, newly edited old copies, or a missing/changed retained session defer the
+cleanup. An atomic `syncCleanup` marker hides the duplicate from the sidebar and
+normal sync; messages/jobs remain intact, with a complete recovery package in
+`data/sync-private/removed`. Old links redirect to a live retained session. App
+backups preserve archive markers. Do not remove `syncCleanup` or restore an older
+revision without first cancelling the reviewed cleanup request on the Mac.
+
+Requests live under `data/sync-private/cleanup-requests`. These are created only
+as part of an explicitly reviewed cleanup, never inferred from unrelated missing
+files. `sessionRecords(...).queueCleanup(...)` validates IDs/revisions, checks the
+retained session exists, and archives a still-present exact old copy before
+persisting the request. The host rejects attempts to re-upload that removed ID.
+Both apps need v19 for this behavior; older companions still support ordinary
+session sync. Existing pairing codes stay valid.
+
 ## Astra Fast mode in v16
 
 In an existing ChatGPT Astra lesson, tap the thinking-level pill (for example,

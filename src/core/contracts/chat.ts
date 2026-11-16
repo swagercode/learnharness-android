@@ -34,6 +34,8 @@ export interface ChatRecord {
 	updatedAt: string;
 	/** Sync edit time also covers renames/settings without reordering the sidebar. */
 	syncUpdatedAt?: string;
+	/** Recoverable duplicate archive; never transmitted as a live session. */
+	syncCleanup?: import("../session-cleanup.ts").SessionCleanup;
 	messages: LhMessage[];
 	/** The session's kind — absent = teach (pre-practice records). */
 	kind?: ChatKind;
