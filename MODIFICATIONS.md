@@ -47,6 +47,9 @@ The Android distribution adds or changes:
   archives, restart-safe cleanup markers, and old-session redirects.
 - Corrected ChatGPT Fast request compatibility (v20), with saved per-reply
   processing-tier evidence and explicit reporting when OpenAI serves Standard.
+- Bounded interactive ChatGPT pacing (v21), Astra current-turn reasoning context,
+  one safe recovery of a silent stalled request, focused teaching instructions,
+  and preserved single-writer ownership of long-running replies.
 - Android build, signing, validation, and release documentation.
 
 Corresponding source and build instructions:

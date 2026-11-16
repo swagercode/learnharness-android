@@ -1,8 +1,8 @@
 /**
  * Turn liveness registry unit tests (src/server/turn-liveness.ts): one turn
  * per chat, ever — begin/end round trip, double-begin rejection, restart
- * after end. The 30-minute stale-eviction TTL is not tested (it is a leak
- * guard, not a behavior). The lifecycle-emitter pins ride the same seams:
+ * after end, and ownership after the orphan-cleanup interval.
+ * The lifecycle-emitter pins ride the same seams:
  * turn-started on the accepted begin only, turn-settled on the live end
  * only, and the registry already consistent when the listener runs.
  */
@@ -11,9 +11,30 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { beginTurn, endTurn, isTurnRunning } from "../src/server/turn-liveness.ts";
 import { subscribe, type ServerEvent } from "../src/core/events.ts";
-import { rememberTurnFailure, settledTurnResponse } from "../src/server/turn-runs.ts";
+import { rememberTurnFailure, settledTurnResponse, registerTurn, unregisterTurn, runningTurn, abortTurn } from "../src/server/turn-runs.ts";
 
 describe("turn liveness registry", () => {
+	it("a reply older than 30 minutes still excludes a second writer and remains stoppable", () => {
+		const id = "chat_long_running_unit", now = Date.now;
+		let aborted = false;
+		const handle = { subscribe: () => new ReadableStream<Uint8Array>(), abort: () => { aborted = true; } };
+		try {
+			assert(beginTurn(id)); registerTurn(id, handle);
+			Date.now = () => now() + 31 * 60_000;
+			assert(isTurnRunning(id)); assert.equal(beginTurn(id), false);
+			assert.equal(runningTurn(id), handle); assert.deepEqual(abortTurn(id), { ok: true }); assert(aborted);
+			assert(isTurnRunning(id), "Stop retains ownership until settlement saves partial work");
+			endTurn(id); unregisterTurn(id); assert.equal(isTurnRunning(id), false);
+		} finally { Date.now = now; endTurn(id); unregisterTurn(id); }
+	});
+
+	it("an old claim without a live runner can still recover", () => {
+		const id = "chat_orphaned_unit", now = Date.now;
+		try {
+			assert(beginTurn(id)); Date.now = () => now() + 31 * 60_000;
+			assert.equal(isTurnRunning(id), false); assert(beginTurn(id));
+		} finally { Date.now = now; endTurn(id); }
+	});
 	it("retains a late-attach failure notice until the next accepted begin", async () => {
 		const id = "chat_failure_notice_unit";
 		rememberTurnFailure(id, "The reply could not be saved.");

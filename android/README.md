@@ -22,6 +22,32 @@ The x86_64 APK is for emulator validation. Both use the same application payload
 Usage is subject to the limits and eligibility of the connected ChatGPT plan.
 The app never falls back to a developer's API key. No account is shipped in it.
 
+### Lesson pacing in v21
+
+Interactive Astra replies now use `reasoning.context: current_turn`, keeping the
+complete lesson and tool history while asking the service not to render older
+turns' private reasoning into the next response. The selected model, thinking
+effort, ChatGPT account, and Fast preference are preserved.
+
+Each interactive ChatGPT model request has a 60-second deadline. A request that
+delivered only thinking can retry once with a focused next-step instruction;
+the original request is cancelled first. Calls in the same lesson turn share a
+three-minute deadline. Partial teaching and tool calls are never automatically
+replayed by this recovery. Stop still cancels immediately. These deadlines do
+not apply to background research, extraction, compaction, or local tool execution.
+If recovery also stalls, the saved answer remains available and the app reports
+a retryable error instead of waiting indefinitely.
+
+Tutor instructions emphasize one useful next step and actual verification over
+repeated planning. Three isolated replays of a long C++ lesson produced usable
+next questions in 12–24 seconds on Astra Low with the ChatGPT subscription;
+this is a validation sample, not a response-time guarantee.
+
+Also fixes the turn ownership guard: a live reply remains the sole writer even
+after 30 minutes, so reconnecting cannot start a second reply over it. Related
+upstream reports: [long thinking sequences (#233)](https://github.com/amosblomqvist/learnharness/issues/233)
+and [overlapping replies after 30 minutes (#524)](https://github.com/amosblomqvist/learnharness/issues/524).
+
 ### Astra speed in v20
 
 In an Astra session, open the thinking menu and choose **Request Fast**. The

@@ -15,13 +15,13 @@
  *
  * Still ephemeral BY DESIGN: a process restart clears it, so there are no
  * stale flags to clean up — a crashed turn recovers via the write-ahead
- * record + mount continuation on the next visit. The TTL is a leak guard for
- * the pathological case where onFinish never fires (it runs even on aborts);
- * chat turns are minutes at most, so 30 minutes is far on the safe side.
+ * record + mount continuation on the next visit. The TTL only clears an
+ * orphaned claim with no live runner. An old but still-running reply must
+ * keep owning the chat, including its Stop control and saved results.
  */
 
 import { emit } from "../core/events.ts";
-import { clearTurnFailure } from "./turn-runs.ts";
+import { clearTurnFailure, runningTurn } from "./turn-runs.ts";
 
 interface LhGlobal {
 	__lhTurnRegistry?: Map<string, number>;
@@ -69,7 +69,7 @@ export function endTurn(chatId: string): void {
 export function isTurnRunning(chatId: string): boolean {
 	const since = inFlight.get(chatId);
 	if (since === undefined) return false;
-	if (Date.now() - since > MAX_TURN_MS) {
+	if (Date.now() - since > MAX_TURN_MS && !runningTurn(chatId)) {
 		inFlight.delete(chatId);
 		return false;
 	}

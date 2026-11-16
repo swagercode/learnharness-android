@@ -8,7 +8,8 @@ import path from "node:path";
 import { backgroundCaptureDir, backgroundCaptureStream, createBackgroundCapture } from "../src/agent/background-capture.ts";
 import { piModels, piEngineForSpec } from "../src/agent/models.ts";
 import { chatGPTAbortController, chatGPTModels, refreshChatGPTModels } from "../src/agent/chatgpt-bridge.ts";
-import { chatGPTHistory, chatGPTPayload, chatGPTSpeedForUsage } from "../src/agent/chatgpt-stream.ts";
+import { chatGPTHistory, chatGPTPayload, chatGPTSpeedForUsage, chatGPTStream } from "../src/agent/chatgpt-stream.ts";
+import { createLessonPacing, LESSON_RECOVERY_INSTRUCTIONS } from "../src/agent/lesson-pacing.ts";
 
 const originalSend = Object.getOwnPropertyDescriptor(process, "send");
 const originalConnected = Object.getOwnPropertyDescriptor(process, "connected");
@@ -54,6 +55,112 @@ const usage = { input_tokens: 10, output_tokens: 4, total_tokens: 14, input_toke
 const complete = (output: unknown[] = []) => ({ type: "response.completed", response: { id: "resp_scratch", status: "completed", output, usage } });
 const context = () => normalizeContext({ systemPrompt: "Scratch teacher instructions", messages: [{ role: "user", content: [{ type: "text", text: "Scratch learning material" }, { type: "image", data: "c2NyYXRjaA==", mimeType: "image/png" }], timestamp: 1 }], tools: [{ name: "scratch_tool", description: "Scratch local tool", parameters: Type.Object({ value: Type.String() }) }] });
 
+function stalledResponse(signal: AbortSignal, events: unknown[] = [], onAbort = () => {}) {
+	let abort: () => void;
+	return new Response(new ReadableStream({
+		start(controller) {
+			for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+			abort = () => { onAbort(); controller.error(new DOMException("Aborted", "AbortError")); };
+			if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true });
+		},
+		cancel() { onAbort(); signal.removeEventListener("abort", abort); },
+	}), { headers: { "content-type": "text/event-stream" } });
+}
+
+test("a silent lesson timeout cancels its request before one focused recovery with the same account/model/history", async () => {
+	const pacing = { ...createLessonPacing(), attemptMs: 35, turnMs: 3000 };
+	let calls = 0, aborted = false, admitted = 0;
+	const bodies: any[] = [];
+	const stream = chatGPTStream(() => false, { captured() {}, beforeDispatch() { admitted++; }, noDispatch() { assert.fail("already admitted"); } }, false, pacing);
+	const result = await stream({ ...astra, provider: "chatgpt" }, context(), { reasoning: "low", fetch: async (input, init) => {
+		const req = new Request(input, init); bodies.push(await req.clone().json());
+		assert.equal(req.headers.get("authorization"), "Bearer scratch-oauth-only");
+		if (++calls === 1) return stalledResponse(req.signal, [{ type: "response.created", response: { id: "slow" } }], () => { aborted = true; });
+		assert(aborted, "the first request must be cancelled before spending on another");
+		return new Response(`data: ${JSON.stringify(complete())}\n\n`, { headers: { "content-type": "text/event-stream" } });
+	} }).result();
+	assert.equal(result.stopReason, "stop", JSON.stringify({ error: result.errorMessage, calls, admitted, aborted })); assert.equal(calls, 2); assert.equal(admitted, 1);
+	assert.deepEqual(bodies[1].input, bodies[0].input, "preserve learner answers, images and completed tools");
+	assert(bodies[1].instructions.endsWith(LESSON_RECOVERY_INSTRUCTIONS));
+	assert.equal(bodies[1].model, astra.id); assert.equal(bodies[1].reasoning.effort, "low");
+	assert.equal(bodies[0].reasoning.context, "current_turn"); assert.equal(bodies[1].reasoning.context, "current_turn");
+	assert.equal(bodies[1].max_output_tokens, undefined, "subscription requests must omit unsupported caps");
+	assert.equal(pacing.recoveryUsed, true);
+});
+
+test("a second silent timeout settles as a retryable error, not a user cancellation or endless loop", async () => {
+	let calls = 0;
+	const stream = chatGPTStream(() => false, undefined, false, { ...createLessonPacing(), attemptMs: 25, turnMs: 3000 });
+	const source = stream({ ...astra, provider: "chatgpt" }, context(), { fetch: async (input, init) => { calls++; return stalledResponse(new Request(input, init).signal); } });
+	const events = []; for await (const event of source) events.push(event);
+	const result = await source.result();
+	assert.equal(calls, 2); assert.equal(result.stopReason, "error");
+	assert.match(result.errorMessage!, /took too long/);
+	assert.equal(events.filter(e => e.type === "error").length, 1);
+	assert.equal(events.filter(e => e.type === "start").length, 1, "recovery is one logical assistant message");
+});
+
+test("Stop during a paced request cancels immediately and never spends on recovery", async () => {
+	let calls = 0;
+	const controller = new AbortController();
+	const stream = chatGPTStream(() => false, undefined, false, { ...createLessonPacing(), attemptMs: 100, turnMs: 3000 });
+	const result = await stream({ ...astra, provider: "chatgpt" }, context(), { signal: controller.signal, fetch: async (input, init) => {
+		calls++; setTimeout(() => controller.abort(), 10); return stalledResponse(new Request(input, init).signal);
+	} }).result();
+	assert.equal(calls, 1); assert.equal(result.stopReason, "aborted");
+});
+
+for (const kind of ["text", "tool"] as const) test(`a timed-out partial ${kind} is preserved and never automatically replayed`, async () => {
+	let calls = 0;
+	const events = kind === "tool" ? [
+		{ type: "response.output_item.added", output_index: 0, item: { type: "function_call", id: "fc_partial", call_id: "call_partial", name: "scratch_tool", namespace: "learnharness", arguments: "" } },
+	] : [
+		{ type: "response.output_item.added", output_index: 0, item: { type: "message", id: "msg_partial", role: "assistant", content: [] } },
+		{ type: "response.content_part.added", output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } },
+		{ type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "A partial explanation" },
+	];
+	const stream = chatGPTStream(() => false, undefined, false, { ...createLessonPacing(), attemptMs: 35, turnMs: 3000 });
+	const result = await stream({ ...astra, provider: "chatgpt" }, context(), { fetch: async (input, init) => { calls++; return stalledResponse(new Request(input, init).signal, events); } }).result();
+	assert.equal(calls, 1); assert.equal(result.stopReason, "error");
+	assert(result.content.some(b => b.type === (kind === "tool" ? "toolCall" : "text")));
+});
+
+test("the lesson deadline and recovery allowance are shared across model/tool calls", async () => {
+	const pacing = { ...createLessonPacing(), attemptMs: 25, turnMs: 3000 };
+	const stream = chatGPTStream(() => false, undefined, false, pacing);
+	let calls = 0;
+	const fetch: typeof globalThis.fetch = async () => { calls++; return new Response(`data: ${JSON.stringify(complete())}\n\n`, { headers: { "content-type": "text/event-stream" } }); };
+	assert.equal((await stream({ ...astra, provider: "chatgpt" }, context(), { fetch }).result()).stopReason, "stop");
+	pacing.deadline = Date.now() - 1;
+	const result = await stream({ ...astra, provider: "chatgpt" }, context(), { fetch }).result();
+	assert.equal(calls, 1); assert.equal(result.stopReason, "error"); assert.match(result.errorMessage!, /took too long/);
+});
+
+test("one silent incomplete response recovers, but a subscription usage refusal never does", async () => {
+	for (const quota of [false, true]) {
+		let calls = 0;
+		const pacing = { ...createLessonPacing(), attemptMs: 500, turnMs: 3000 };
+		const stream = chatGPTStream(() => false, undefined, false, pacing);
+		const result = await stream({ ...astra, provider: "chatgpt" }, context(), { fetch: async () => {
+			const event = ++calls === 1 ? quota
+				? { type: "error", code: "subscription_sharing_usage_limit_exceeded" }
+				: { type: "response.incomplete", response: { id: "silent", status: "incomplete", output: [], incomplete_details: { reason: "max_output_tokens" }, usage } }
+				: complete();
+			return new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { "content-type": "text/event-stream" } });
+		} }).result();
+		assert.equal(calls, quota ? 1 : 2); assert.equal(result.stopReason, quota ? "error" : "stop");
+		if (quota) assert.match(result.errorMessage!, /plan usage limit/);
+	}
+});
+
+test("a later tool continuation does not get a second automatic recovery allowance", async () => {
+	const pacing = { ...createLessonPacing(), attemptMs: 25, turnMs: 3000, recoveryUsed: true };
+	const stream = chatGPTStream(() => false, undefined, false, pacing);
+	let calls = 0;
+	const result = await stream({ ...astra, provider: "chatgpt" }, context(), { fetch: async (input, init) => { calls++; return stalledResponse(new Request(input, init).signal); } }).result();
+	assert.equal(calls, 1); assert.equal(result.stopReason, "error");
+});
+
 test("catalog intersects supported capabilities, without inventing model limits", () => {
 	assert.equal(chatGPTModels().length, 2);
 	assert.equal(chatGPTModels()[0]!.provider, "chatgpt");
@@ -91,6 +198,30 @@ test("alias resolves only OAuth; native Responses body is stateless/namespaced, 
 	assert(replay.some((item: any) => item.encrypted_content === "scratch-encrypted-reasoning"));
 	assert(replay.some((item: any) => item.type === "function_call" && item.id === "fc_scratch" && item.namespace === "learnharness"));
 	assert(replay.some((item: any) => item.type === "function_call_output" && item.call_id === "call_scratch"));
+});
+
+test("interactive Astra limits reasoning context without deleting signed history, changing effort or affecting background models", async () => {
+	const signature = { type: "reasoning", id: "rs_history", summary: [], encrypted_content: "opaque-prior-reasoning" };
+	const prior: AssistantMessage = { role: "assistant", provider: "chatgpt", api: "openai-responses", model: astra.id, content: [
+		{ type: "thinking", thinking: "", thinkingSignature: JSON.stringify(signature), redacted: true },
+		{ type: "toolCall", id: "call_history|fc_history", name: "scratch_tool", namespace: "learnharness", arguments: { value: "earlier work" } },
+	], stopReason: "toolUse", usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, timestamp: 1 };
+	const history = normalizeContext({ ...context(), messages: [...context().messages, prior, { role: "toolResult", toolCallId: "call_history|fc_history", toolName: "scratch_tool", content: [{ type: "text", text: "Completed work" }], isError: false, timestamp: 2 }] });
+	const saved = JSON.stringify(history);
+	for (const [selected, interactive] of [[astra, true], [astra, false], [model, true]] as const) {
+		requests = []; responseEvents = [complete()];
+		const engine = piEngineForSpec({ provider: "chatgpt", id: selected.id, thinkingLevel: "low" }, false, undefined, undefined, interactive);
+		await engine.streamFn(engine.model, history).result();
+		const body = requests[0]!.body;
+		assert.equal(body.reasoning.context, interactive && selected === astra ? "current_turn" : undefined);
+		assert.equal(body.reasoning.effort, "low");
+		if (selected === astra) {
+			assert(body.input.some((item: any) => item.encrypted_content === signature.encrypted_content));
+			assert(body.input.some((item: any) => item.type === "function_call" && item.id === "fc_history"));
+			assert(body.input.some((item: any) => item.type === "function_call_output" && item.call_id === "call_history"));
+		}
+	}
+	assert.equal(JSON.stringify(history), saved, "saved lesson history must not be changed");
 });
 
 test("mixed history never blanket-relabels API providers or reuses foreign reasoning signatures", () => {

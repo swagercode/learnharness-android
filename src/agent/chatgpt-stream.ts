@@ -7,6 +7,7 @@ import type { AdmissionScope, ChatGPTDispatchLifecycle } from "./chatgpt-request
 import { capturePreparedBackgroundPayload } from "./background-capture.ts";
 import { retryChatGPTRequest } from "./chatgpt-retry.ts";
 import { chatGPTServedSpeed, supportsAstraFastMode, type ChatGPTSpeed } from "../core/fast-mode.ts";
+import { LESSON_PACING_ERROR, LESSON_RECOVERY_INSTRUCTIONS, type LessonPacing } from "./lesson-pacing.ts";
 
 // Preserve the provider's completed-response evidence alongside native usage.
 // Do not add application metadata to the model's replayed message history.
@@ -15,6 +16,7 @@ export function chatGPTSpeedForUsage(usage: object): ChatGPTSpeed | undefined { 
 
 const USAGE = "https://chatgpt.com/settings/usage";
 export function chatGPTStreamError(message: string, fastMode = false): string {
+	if (message === "lesson_response_timeout") return LESSON_PACING_ERROR;
 	if (fastMode && /service[_ -]tier/i.test(message)) return "ChatGPT could not use Fast mode for this request. Choose Standard under Thinking → Astra speed, then retry. Your session is preserved; no API-key fallback was used.";
 	if (/usage_limit|quota/.test(message)) return `ChatGPT plan usage limit reached. Manage usage at ${USAGE}. No API-key fallback was used.`;
 	if (/slow_down|rate_limit|429/.test(message)) return "ChatGPT is temporarily limiting requests. Automatic retries could not complete this request. Try again later.";
@@ -60,7 +62,7 @@ export function chatGPTHistory(context: TranscriptContext, logicalModel: Model<A
 function empty(model: Model<Api>): AssistantMessage {
 	return { role: "assistant", api: model.api, provider: "chatgpt", model: model.id, content: [], stopReason: "error", timestamp: Date.now(), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 }
-export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDispatchLifecycle, fastMode = false): StreamFunction<Api, SimpleStreamOptions> {
+export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDispatchLifecycle, fastMode = false, pacing?: LessonPacing): StreamFunction<Api, SimpleStreamOptions> {
 	return (logicalModel, context, options) => {
 		const useFastMode = fastMode && supportsAstraFastMode(logicalModel);
 		const output = new AssistantMessageEventStream();
@@ -69,12 +71,10 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 		const signal = options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
 		void (async () => {
 			let partial = empty(logicalModel);
-			let completed = false;
-			let servedSpeed: ChatGPTSpeed["served"] = "unconfirmed";
-			let failure = "";
 			let scope: AdmissionScope | undefined;
 			let committed = false;
 			let terminal = false;
+			let started = false;
 			const check = () => { if (signal.aborted || !scope || !chatGPTScopeCurrent(scope)) throw new Error("cancelled or catalog authority changed"); };
 			try {
 				if (logicalModel.provider !== "chatgpt") throw new Error("ChatGPT account catalog has no selected model");
@@ -86,59 +86,108 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 				// NEVER dispatch through Models under openai: that would expose ambient API-key fallback.
 				const transport: Model<"openai-responses"> = { ...logicalModel, api: "openai-responses", provider: "openai", baseUrl: "https://api.openai.com/v1", headers: undefined, samplingParams: undefined, compat: { ...logicalModel.compat, supportsDeveloperRole: true } };
 				const delegate = options?.fetch ?? globalThis.fetch;
-				const source = streamSimple(transport, chatGPTHistory(context, logicalModel), {
-					...options,
-					apiKey: credentials.accessToken,
-					signal,
-					maxRetries: 0,
-					headers: { "OpenAI-Beta": null, ...options?.headers },
-					fetch: (input, init) => {
-						// The SDK retry layer stays disabled: one logical admission and
-						// one set of input messages, even across several HTTP attempts.
-						const requestSignal = init?.signal ? AbortSignal.any([signal, init.signal]) : signal;
-						return retryChatGPTRequest(async (attempt) => {
+				// A silent attempt may be replaced once, before any text or tool
+				// call is delivered. Completed work from earlier calls is retained
+				// in context; recovery never reruns an already executed tool.
+				let recovering = false;
+				for (;;) {
+					let completed = false;
+					let servedSpeed: ChatGPTSpeed["served"] = "unconfirmed";
+					let failure = "";
+					let timedOut = false;
+					let delivered = false;
+					const attempt = new AbortController();
+					const attemptSignal = AbortSignal.any([signal, attempt.signal]);
+					let timer: ReturnType<typeof setTimeout> | undefined;
+					if (pacing) {
+						pacing.deadline ??= Date.now() + pacing.turnMs;
+						const remaining = pacing.deadline - Date.now();
+						if (remaining <= 0) throw new Error("lesson_response_timeout");
+						timer = setTimeout(() => { timedOut = true; attempt.abort(); }, Math.min(pacing.attemptMs, remaining));
+					}
+					try {
+						const source = streamSimple(transport, chatGPTHistory(context, logicalModel), {
+							...options,
+							apiKey: credentials.accessToken,
+							signal: attemptSignal,
+							maxRetries: 0,
+							headers: { "OpenAI-Beta": null, ...options?.headers },
+							fetch: (input, init) => {
+								// The SDK retry layer stays disabled: one logical admission and
+								// one set of input messages, even across several HTTP attempts.
+								const requestSignal = init?.signal ? AbortSignal.any([attemptSignal, init.signal]) : attemptSignal;
+								return retryChatGPTRequest(async (httpAttempt) => {
+									check();
+									const accessToken = httpAttempt === 0 && !recovering ? credentials.accessToken : (await chatGPTLease(scope!, purpose)).accessToken;
+									check();
+									requestSignal.throwIfAborted();
+									if (!committed) {
+										lifecycle?.beforeDispatch(scope!);
+										committed = true;
+									}
+									const headers = new Headers(init?.headers);
+									headers.set("authorization", `Bearer ${accessToken}`);
+									return delegate(input, { ...init, headers, signal: requestSignal });
+								}, requestSignal);
+							},
+							onPayload: async (raw, model) => {
+								const replacement = await options?.onPayload?.(raw, model);
+								const payload = chatGPTPayload(replacement === undefined ? raw : replacement, logicalModel.id, useFastMode);
+								// Long lessons accumulate opaque reasoning from earlier replies.
+								// Keep every replay item/signature for protocol continuity, but
+								// ask Astra to render only the active turn's reasoning. Verified
+								// on the subscription endpoint; other models keep their defaults.
+								if (pacing && logicalModel.id === "gpt-6-astra") {
+									payload.reasoning = { ...(payload.reasoning as Record<string, unknown> | undefined), context: "current_turn" };
+								}
+								if (recovering) payload.instructions = `${typeof payload.instructions === "string" ? payload.instructions : ""}\n\n${LESSON_RECOVERY_INSTRUCTIONS}`;
+								check();
+								capturePreparedBackgroundPayload(payload, logicalModel);
+								return payload;
+							},
+							onProviderStreamEvent: async (raw, model) => {
+								const event = raw as { type?: string; code?: string; error?: { code?: string }; response?: { error?: { code?: string }; status?: string; service_tier?: unknown } };
+								if (event.type === "response.completed" && event.response?.status === "completed" && !event.response?.error) {
+									completed = true;
+									servedSpeed = chatGPTServedSpeed(event.response.service_tier);
+								}
+								if (["response.incomplete", "response.failed", "error"].includes(event.type ?? "") || event.response?.error) failure = event.code || event.error?.code || event.response?.error?.code || "incomplete terminal response";
+								await options?.onProviderStreamEvent?.(raw, model);
+							},
+						});
+						for await (const event of source) {
+							const message = "partial" in event ? event.partial : event.type === "done" ? event.message : event.error;
+							// Copy the message, not its tool/reasoning blocks: IDs/signatures remain byte-for-byte intact.
+							partial = { ...message, provider: "chatgpt" };
+							delivered ||= partial.content.some(block => block.type === "toolCall" || (block.type === "text" && block.text.trim().length > 0));
+							if (timedOut) throw new Error("lesson_response_timeout");
 							check();
-							const accessToken = attempt === 0 ? credentials.accessToken : (await chatGPTLease(scope!, purpose)).accessToken;
-							check();
-							requestSignal.throwIfAborted();
-							if (!committed) {
-								lifecycle?.beforeDispatch(scope!);
-								committed = true;
+							if (event.type === "done") {
+								if (!completed || failure) throw new Error(failure || "missing terminal response.completed");
+								speeds.set(partial.usage, { requested: useFastMode ? "fast" : "standard", served: servedSpeed });
+								terminal = true;
+								output.push({ ...event, message: partial });
+							} else if (event.type === "error") {
+								throw new Error(failure || event.error.errorMessage || "ChatGPT stream error");
+							} else if (event.type !== "start" || !started) {
+								started ||= event.type === "start";
+								output.push({ ...event, partial });
 							}
-							const headers = new Headers(init?.headers);
-							headers.set("authorization", `Bearer ${accessToken}`);
-							return delegate(input, { ...init, headers, signal: requestSignal });
-						}, requestSignal);
-					},
-					onPayload: async (raw, model) => {
-						const replacement = await options?.onPayload?.(raw, model);
-						const payload = chatGPTPayload(replacement === undefined ? raw : replacement, logicalModel.id, useFastMode);
-						check();
-						capturePreparedBackgroundPayload(payload, logicalModel);
-						return payload;
-					},
-					onProviderStreamEvent: async (raw, model) => {
-						const event = raw as { type?: string; code?: string; error?: { code?: string }; response?: { error?: { code?: string }; status?: string; service_tier?: unknown } };
-						if (event.type === "response.completed" && event.response?.status === "completed" && !event.response?.error) {
-							completed = true;
-							servedSpeed = chatGPTServedSpeed(event.response.service_tier);
 						}
-						if (["response.incomplete", "response.failed", "error"].includes(event.type ?? "") || event.response?.error) failure = event.code || event.error?.code || event.response?.error?.code || "incomplete terminal response";
-						await options?.onProviderStreamEvent?.(raw, model);
-					},
-				});
-				for await (const event of source) {
-					const message = "partial" in event ? event.partial : event.type === "done" ? event.message : event.error;
-					// Copy the message, not its tool/reasoning blocks: IDs/signatures remain byte-for-byte intact.
-					partial = { ...message, provider: "chatgpt" };
-					if (event.type === "done") {
-						if (!completed || failure) throw new Error(failure || "missing terminal response.completed");
-						speeds.set(partial.usage, { requested: useFastMode ? "fast" : "standard", served: servedSpeed });
-						terminal = true;
-						output.push({ ...event, message: partial });
-					} else if (event.type === "error") {
-						throw new Error(failure || event.error.errorMessage || "ChatGPT stream error");
-					} else output.push({ ...event, partial });
+						return;
+					} catch (err) {
+						const incomplete = failure === "incomplete terminal response";
+						if (pacing && !pacing.recoveryUsed && !delivered && (timedOut || incomplete) && !signal.aborted && scope && chatGPTScopeCurrent(scope) && Date.now() < pacing.deadline!) {
+							pacing.recoveryUsed = true;
+							recovering = true;
+							partial = empty(logicalModel);
+							continue;
+						}
+						throw timedOut && !signal.aborted ? new Error("lesson_response_timeout") : err;
+					} finally {
+						if (timer) clearTimeout(timer);
+						attempt.abort();
+					}
 				}
 			} catch (err) {
 				if (terminal) return;
